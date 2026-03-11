@@ -1,0 +1,54 @@
+{
+  "name": "stylevault-backend",
+  "version": "1.0.0",
+  "description": "Backend for StyleVault - Barber SaaS Platform",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "lint": "eslint .",
+    "prettier": "prettier --write .",
+    "test:booking-email": "node tests/bookingEmailTest.js",
+    "resend:confirmation": "node scripts/resendConfirmation.js"
+  },
+  "keywords": [
+    "barber",
+    "saas",
+    "booking",
+    "stylevault",
+    "backend"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "bullmq": "^5.70.4",
+    "cloudinary": "^1.39.0",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.6.1",
+    "easyinvoice": "^3.0.47",
+    "express": "^4.18.2",
+    "helmet": "^7.1.0",
+    "ioredis": "^5.10.0",
+    "joi": "^17.10.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^7.5.1",
+    "morgan": "^1.10.0",
+    "multer": "^2.1.1",
+    "node-fetch": "^3.3.2",
+    "pdfkit": "^0.17.2",
+    "react-email": "^5.2.9",
+    "resend": "^6.9.3",
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.47.0",
+    "nodemon": "^3.0.1",
+    "prettier": "^3.0.0",
+    "puppeteer-core": "^24.6.1"
+  }
+}
