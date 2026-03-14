@@ -11,7 +11,12 @@ const authMiddleware = async (req, res, next) => {
     const user = await User.findById(decoded.id);
     if (!user) return res.status(401).json({ message: 'User not found' });
 
-    req.user = { id: user._id, role: user.role, barberId: user.barberId };
+    req.user = {
+      id: user._id,
+      role: user.role,
+      barberId: user.barberId,
+      hairSpecialistId: user.hairSpecialistId,
+    };
     next();
   } catch (error) {
     res.status(401).json({ message: 'Token is not valid' });

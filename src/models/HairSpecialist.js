@@ -1,7 +1,6 @@
-// src/models/Barber.js
 import mongoose from 'mongoose';
 
-const barberSchema = new mongoose.Schema({
+const hairSpecialistSchema = new mongoose.Schema({
   name: { type: String, required: true },
   slug: { type: String, required: true, unique: true },
   bio: { type: String },
@@ -18,8 +17,9 @@ const barberSchema = new mongoose.Schema({
     linkedin: { type: String, trim: true },
   },
   currency: { type: String, default: 'USD' },
-  workingHours: { type: Object, default: {} }, // e.g., { Monday: ["09:00","17:00"] }
-  subscriptionPlan: { type: String, enum: ['free','pro'], default: 'free' },
+  workingHours: { type: Object, default: {} },
+  specialties: { type: [String], default: [] },
+  subscriptionPlan: { type: String, enum: ['free', 'pro'], default: 'free' },
 }, { timestamps: true });
 
-export default mongoose.model('Barber', barberSchema);
+export default mongoose.model('HairSpecialist', hairSpecialistSchema);

@@ -8,13 +8,19 @@ import errorHandler from './middleware/errorHandler.js';
 
 import authRoutes from './routes/authRoutes.js';
 import barberRoutes from './routes/barberRoutes.js';
+import hairSpecialistRoutes from './routes/hairSpecialistRoutes.js';
 import serviceRoutes from './routes/serviceRoutes.js';
+import hairServiceRoutes from './routes/hairServiceRoutes.js';
 import appointmentRoutes from './routes/appointmentRoutes.js';
+import hairAppointmentRoutes from './routes/hairAppointmentRoutes.js';
 import customerRoutes from './routes/customerRoutes.js';
+import hairCustomerRoutes from './routes/hairCustomerRoutes.js';
 import emailRoutes from './routes/emailRoutes.js';
 import serviceCatalogRoutes from './routes/serviceCatalogRoutes.js';
+import hairServiceCatalogRoutes from './routes/hairServiceCatalogRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import proRoutes from './routes/proRoutes.js';
+import hairAuthRoutes from './routes/hairAuthRoutes.js';
 
 const app = express();
 
@@ -45,12 +51,18 @@ app.use(morgan('dev'));
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/hair-auth', hairAuthRoutes);
 app.use('/api/barbers', barberRoutes);
+app.use('/api/hair-specialists', hairSpecialistRoutes);
 app.use('/api/services', serviceRoutes);
+app.use('/api/hair-services', hairServiceRoutes);
 app.use('/api/appointments', appointmentRoutes);
+app.use('/api/hair-appointments', hairAppointmentRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/hair-customers', hairCustomerRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/service-catalog', serviceCatalogRoutes);
+app.use('/api/hair-service-catalog', hairServiceCatalogRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/pro-request', proRoutes);
 

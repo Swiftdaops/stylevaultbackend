@@ -9,6 +9,8 @@
     "dev": "nodemon server.js",
     "lint": "eslint .",
     "prettier": "prettier --write .",
+    "seed:jennie-stylist": "node scripts/seedJennieHairSpecialist.js",
+    "seed:hair-service-catalog": "node scripts/seedHairServiceCatalog.js",
     "test:booking-email": "node tests/bookingEmailTest.js",
     "resend:confirmation": "node scripts/resendConfirmation.js"
   },

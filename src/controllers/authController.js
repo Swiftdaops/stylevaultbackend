@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import Barber from '../models/Barber.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { mergeWhatsappSocialLink, normalizeCountryCode, resolveCurrencyInput } from '../utils/profileOptions.js';
 
 const generateToken = (barber) => {
   return jwt.sign({ id: barber._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -10,13 +11,22 @@ const generateToken = (barber) => {
 
 // Register new barber
 export const register = async (req, res) => {
-  const { name, email, password, slug } = req.body;
+  const { name, email, password, slug, whatsapp, country, currency } = req.body;
   try {
     const existingUser = await User.findOne({ email });
     if (existingUser) return res.status(400).json({ message: 'Email already exists' });
 
     const hashedPassword = await bcrypt.hash(password, 12);
-    const barber = await Barber.create({ name, slug });
+    const normalizedCountry = normalizeCountryCode(country);
+    const resolvedCurrency = resolveCurrencyInput({ currency, country: normalizedCountry });
+    const barber = await Barber.create({
+      name,
+      slug,
+      whatsapp,
+      country: normalizedCountry || undefined,
+      currency: resolvedCurrency,
+      socialLinks: mergeWhatsappSocialLink({}, whatsapp),
+    });
     const user = await User.create({ email, password: hashedPassword, role: 'barber', barberId: barber._id });
 
     const token = generateToken(user);

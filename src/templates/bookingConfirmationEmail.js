@@ -51,6 +51,8 @@ const summaryRow = (label, value, isLast = false) => `
 export const bookingConfirmationTemplate = ({
   customerName,
   barberName,
+  providerName,
+  providerLabel = 'Barber',
   serviceName,
   appointmentDate,
   appointmentTime,
@@ -85,7 +87,7 @@ export const bookingConfirmationTemplate = ({
                 <tr>
                   <td style="padding:20px;">
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                      ${summaryRow('Barber', barberName)}
+                      ${summaryRow(providerLabel, providerName || barberName)}
                       ${summaryRow('Service', serviceName)}
                       ${summaryRow('Date', formatAppointmentDate(appointmentDate))}
                       ${summaryRow('Time', formatAppointmentTime(appointmentTime))}
@@ -107,7 +109,7 @@ export const bookingConfirmationTemplate = ({
           </tr>
           <tr>
             <td style="padding:0 32px 32px; color:#6b7280; font-size:12px; line-height:1.6; text-align:center;">
-              Need help? Contact support@stylevault.store<br />© ${new Date().getFullYear()} StyleVault
+              Need help? Contact support@stylevault.site<br />© ${new Date().getFullYear()} StyleVault
             </td>
           </tr>
         </table>

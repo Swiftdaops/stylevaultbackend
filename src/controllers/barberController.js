@@ -4,6 +4,7 @@ import Appointment from '../models/Appointment.js';
 import Service from '../models/Service.js';
 import Customer from '../models/Customer.js';
 import { emitBarberUpdate } from '../socket/index.js';
+import { sanitizeProfileUpdates } from '../utils/profileOptions.js';
 
 // Get all barber profiles
 export const getBarbers = async (req, res) => {
@@ -40,7 +41,7 @@ export const getBarber = async (req, res) => {
 // Update barber profile
 export const updateBarber = async (req, res) => {
   const id = req.user?.barberId;
-  const updates = req.body;
+  const updates = sanitizeProfileUpdates(req.body);
   try {
     if (!id) return res.status(400).json({ message: 'Barber id is required' });
 

@@ -53,6 +53,8 @@ export const adminAppointmentNotificationTemplate = ({
   customerEmail,
   customerPhone,
   barberName,
+  providerName,
+  providerLabel = 'Barber',
   serviceName,
   appointmentDate,
   appointmentTime,
@@ -89,7 +91,7 @@ export const adminAppointmentNotificationTemplate = ({
                       ${summaryRow('Customer', customerName)}
                       ${summaryRow('Email', customerEmail)}
                       ${summaryRow('Phone', customerPhone || 'Not provided')}
-                      ${summaryRow('Barber', barberName)}
+                      ${summaryRow(providerLabel, providerName || barberName)}
                       ${summaryRow('Service', serviceName)}
                       ${summaryRow('Date', formatAppointmentDate(appointmentDate))}
                       ${summaryRow('Time', formatAppointmentTime(appointmentTime))}
