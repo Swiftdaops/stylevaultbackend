@@ -36,6 +36,38 @@ function getFrontendHostname() {
 	return extractHostname(process.env.FRONTEND_URL);
 }
 
+function isLocalHostname(hostname) {
+	return (
+		hostname === 'localhost' ||
+		hostname === '127.0.0.1' ||
+		hostname.endsWith('.localhost')
+	);
+}
+
+function isSecureRequest(req) {
+	if (req?.secure) return true;
+
+	const forwardedProto = String(req?.headers?.['x-forwarded-proto'] || '')
+		.split(',')[0]
+		.trim()
+		.toLowerCase();
+	if (forwardedProto) {
+		return forwardedProto === 'https';
+	}
+
+	const origin = String(req?.headers?.origin || '').trim();
+	if (origin) {
+		try {
+			return new URL(origin).protocol === 'https:';
+		} catch {
+			// ignore malformed origin and continue to hostname fallback
+		}
+	}
+
+	const responseHostname = getResponseHostname(req);
+	return !!responseHostname && !isLocalHostname(responseHostname);
+}
+
 export function getAuthCookieDomain(req) {
 	if (process.env.NODE_ENV !== 'production') return undefined;
 
@@ -53,11 +85,7 @@ export function getAuthCookieDomain(req) {
 		return undefined;
 	}
 
-	if (
-		responseBaseDomain === 'localhost' ||
-		responseBaseDomain === '127.0.0.1' ||
-		responseBaseDomain.endsWith('.localhost')
-	) {
+	if (isLocalHostname(responseBaseDomain)) {
 		return undefined;
 	}
 
@@ -66,11 +94,12 @@ export function getAuthCookieDomain(req) {
 
 export function getAuthCookieOptions(req) {
 	const domain = getAuthCookieDomain(req);
+	const secure = isSecureRequest(req);
 
 	return {
 		httpOnly: true,
-		secure: process.env.NODE_ENV === 'production',
-		sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+		secure,
+		sameSite: secure ? 'none' : 'lax',
 		path: '/',
 		...(domain ? { domain } : {}),
 	};
