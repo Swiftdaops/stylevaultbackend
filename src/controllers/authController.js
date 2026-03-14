@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import Barber from '../models/Barber.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { getAuthCookieOptions } from '../utils/authCookies.js';
 import { mergeWhatsappSocialLink, normalizeCountryCode, resolveCurrencyInput } from '../utils/profileOptions.js';
 
 const generateToken = (barber) => {
@@ -30,8 +31,7 @@ export const register = async (req, res) => {
     const user = await User.create({ email, password: hashedPassword, role: 'barber', barberId: barber._id });
 
     const token = generateToken(user);
-
-    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    res.cookie('token', token, getAuthCookieOptions(req));
     res.status(201).json({ user: { email, role: user.role }, barber });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -49,7 +49,7 @@ export const login = async (req, res) => {
     if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
 
     const token = generateToken(user);
-    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    res.cookie('token', token, getAuthCookieOptions(req));
 
     const barber = await Barber.findById(user.barberId);
     res.json({ user: { email, role: user.role }, barber });
@@ -60,7 +60,7 @@ export const login = async (req, res) => {
 
 // Logout
 export const logout = (req, res) => {
-  res.clearCookie('token');
+  res.clearCookie('token', getAuthCookieOptions(req));
   res.json({ message: 'Logged out successfully' });
 };
 

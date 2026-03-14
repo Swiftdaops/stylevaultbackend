@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import HairSpecialist from '../models/HairSpecialist.js';
 import User from '../models/User.js';
+import { getAuthCookieOptions } from '../utils/authCookies.js';
 import { mergeWhatsappSocialLink, normalizeCountryCode, resolveCurrencyInput } from '../utils/profileOptions.js';
 
 const generateToken = (user) => jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -39,8 +40,9 @@ export const registerHairSpecialist = async (req, res) => {
     });
 
     const token = generateToken(user);
+    const cookieOptions = getAuthCookieOptions(req);
 
-    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    res.cookie('token', token, cookieOptions);
     res.status(201).json({ user: { email, role: user.role }, hairSpecialist });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -58,7 +60,9 @@ export const loginHairSpecialist = async (req, res) => {
     if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
 
     const token = generateToken(user);
-    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    const cookieOptions = getAuthCookieOptions(req);
+
+    res.cookie('token', token, cookieOptions);
 
     const hairSpecialist = await HairSpecialist.findById(user.hairSpecialistId);
     res.json({ user: { email, role: user.role }, hairSpecialist });
@@ -68,7 +72,9 @@ export const loginHairSpecialist = async (req, res) => {
 };
 
 export const logoutHairSpecialist = (req, res) => {
-  res.clearCookie('token');
+  const cookieOptions = getAuthCookieOptions(req);
+
+  res.clearCookie('token', cookieOptions);
   res.json({ message: 'Logged out successfully' });
 };
 
