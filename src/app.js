@@ -24,13 +24,61 @@ import hairAuthRoutes from './routes/hairAuthRoutes.js';
 
 const app = express();
 
-// Allowed CORS origins (frontend)
-const allowedOrigins = [
-	process.env.FRONTEND_URL || 'https://stylevault.site',
+const DEFAULT_FRONTEND_URL = process.env.FRONTEND_URL || 'https://stylevault.site';
+
+function normalizeOrigin(value) {
+	return String(value || '').trim().replace(/\/$/, '');
+}
+
+function extractHostname(value) {
+	try {
+		return new URL(normalizeOrigin(value)).hostname.replace(/^www\./, '');
+	} catch {
+		return '';
+	}
+}
+
+const allowedOrigins = new Set([
+	normalizeOrigin(DEFAULT_FRONTEND_URL),
 	'https://www.stylevault.site',
 	'http://localhost:3000',
 	'http://127.0.0.1:3000',
-];
+]);
+
+const rootFrontendHost = extractHostname(DEFAULT_FRONTEND_URL) || 'stylevault.site';
+
+function isAllowedOrigin(origin) {
+	const normalizedOrigin = normalizeOrigin(origin);
+
+	if (!normalizedOrigin) {
+		return true;
+	}
+
+	if (allowedOrigins.has(normalizedOrigin)) {
+		return true;
+	}
+
+	let hostname = '';
+	try {
+		hostname = new URL(normalizedOrigin).hostname.replace(/^www\./, '');
+	} catch {
+		return false;
+	}
+
+	if (hostname === rootFrontendHost || hostname.endsWith(`.${rootFrontendHost}`)) {
+		return true;
+	}
+
+	if (hostname === 'localhost' || hostname === '127.0.0.1') {
+		return true;
+	}
+
+	if (hostname.endsWith('.localhost')) {
+		return true;
+	}
+
+	return false;
+}
 
 // Middleware
 app.use(helmet());
@@ -39,7 +87,7 @@ app.use(
 		origin: (origin, callback) => {
 			// allow requests with no origin (postman, mobile apps, same-origin)
 			if (!origin) return callback(null, true);
-			if (allowedOrigins.includes(origin)) return callback(null, true);
+			if (isAllowedOrigin(origin)) return callback(null, true);
 			return callback(new Error('CORS policy: Origin not allowed'));
 		},
 		credentials: true,
