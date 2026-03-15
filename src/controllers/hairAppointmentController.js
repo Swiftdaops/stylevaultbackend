@@ -4,10 +4,16 @@ import HairService from '../models/HairService.js';
 import HairSpecialist from '../models/HairSpecialist.js';
 import User from '../models/User.js';
 import { sendEmail } from '../services/emailService.js';
-import { sendUserPushNotification } from '../services/pushNotificationService.js';
+import {
+  sendAdminBookingNotificationEmail,
+  sendCustomerBookingConfirmationEmail,
+  sendStorefrontOwnerBookingNotificationEmail,
+} from '../services/bookingNotificationService.js';
+import { sendPushNotificationToEntries, sendUserPushNotification } from '../services/pushNotificationService.js';
 import { emitHairSpecialistUpdate } from '../socket/index.js';
-import { bookingConfirmationTemplate } from '../templates/bookingConfirmationEmail.js';
-import { adminAppointmentNotificationTemplate } from '../templates/adminAppointmentNotificationEmail.js';
+import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
+import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
+import { buildDashboardUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -57,7 +63,9 @@ const getAdminBookingEmail = () => (
   || 'stylevaultlite@gmail.com'
 );
 
-const upsertCustomer = async ({ hairSpecialistId, name, email, phone }) => {
+const MAX_NOTIFICATION_SUBSCRIPTIONS = 10;
+
+const upsertCustomer = async ({ hairSpecialistId, name, email, phone, notificationPreference, req }) => {
   let customer = await HairCustomer.findOne({ hairSpecialistId, email });
 
   if (!customer) {
@@ -66,11 +74,17 @@ const upsertCustomer = async ({ hairSpecialistId, name, email, phone }) => {
       name,
       email,
       phone: phone || undefined,
+      notificationSubscriptions: upsertNotificationDeviceEntries([], notificationPreference, { req, maxItems: MAX_NOTIFICATION_SUBSCRIPTIONS }),
       visitHistory: [],
     });
   } else {
     customer.name = name || customer.name;
     if (phone) customer.phone = phone;
+    customer.notificationSubscriptions = upsertNotificationDeviceEntries(
+      customer.notificationSubscriptions,
+      notificationPreference,
+      { req, maxItems: MAX_NOTIFICATION_SUBSCRIPTIONS }
+    );
     await customer.save();
   }
 
@@ -153,6 +167,7 @@ export const createHairAppointment = async (req, res) => {
       name,
       email,
       phone,
+      notificationPreference,
       hairSpecialistId: bodyHairSpecialistId,
       hairSpecialist,
       slug,
@@ -182,7 +197,14 @@ export const createHairAppointment = async (req, res) => {
     const exists = await HairAppointment.findOne({ hairSpecialistId, date, time, status: { $ne: 'cancelled' } });
     if (exists) return res.status(400).json({ message: 'Time slot already booked' });
 
-    const customer = await upsertCustomer({ hairSpecialistId, name: cName, email: cEmail, phone });
+    const customer = await upsertCustomer({
+      hairSpecialistId,
+      name: cName,
+      email: cEmail,
+      phone,
+      notificationPreference,
+      req,
+    });
     const bookingSelections = resolveBookingSelections(service, req.body);
 
     const appointment = await HairAppointment.create({
@@ -193,6 +215,7 @@ export const createHairAppointment = async (req, res) => {
       customerId: customer._id,
       customerName: cName,
       customerEmail: cEmail,
+      managementToken: generateBookingManagementToken(),
       price: bookingSelections.totalPrice,
       selectedPricingOption: bookingSelections.selectedPricingOption,
       selectedAddOns: bookingSelections.selectedAddOns,
@@ -212,25 +235,30 @@ export const createHairAppointment = async (req, res) => {
     let specialistEmailError = null;
     let specialistPushResult = null;
     let specialistPushError = null;
+    let customerPushResult = null;
+    let customerPushError = null;
 
-    const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+    const manageLink = buildStorefrontManageBookingUrl({
+      slug: specialistProfile.slug,
+      providerPath: 'hair-specialists',
+      providerType: 'hair-specialist',
+      appointmentId: appointment._id.toString(),
+      accessToken: appointment.managementToken,
+    });
 
     try {
-      emailResult = await sendEmail({
+      emailResult = await sendCustomerBookingConfirmationEmail({
         to: cEmail,
-        subject: 'Your appointment is confirmed',
-        html: bookingConfirmationTemplate({
-          customerName: cName,
-          providerName: specialistProfile.name,
-          providerLabel: 'Hair Specialist',
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: specialistProfile.location || 'StyleVault booking',
-          price: bookingSelections.totalPrice,
-          currency: specialistProfile.currency || 'USD',
-          manageLink: `${appBaseUrl}/hair-specialists/${specialistProfile.slug}`,
-        }),
+        customerName: cName,
+        providerName: specialistProfile.name,
+        providerLabel: 'Hair Specialist',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: specialistProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: specialistProfile.currency || 'USD',
+        manageLink,
       });
     } catch (err) {
       emailError = err.message;
@@ -238,10 +266,29 @@ export const createHairAppointment = async (req, res) => {
     }
 
     try {
-      adminEmailResult = await sendEmail({
+      adminEmailResult = await sendAdminBookingNotificationEmail({
         to: getAdminBookingEmail(),
-        subject: `New appointment: ${cName} booked ${service.name}`,
-        html: adminAppointmentNotificationTemplate({
+        customerName: cName,
+        customerEmail: cEmail,
+        customerPhone: phone,
+        providerName: specialistProfile.name,
+        providerLabel: 'Hair Specialist',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: specialistProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: specialistProfile.currency || 'USD',
+      });
+    } catch (err) {
+      adminEmailError = err.message;
+      console.error('Hair admin booking email failed:', err.message);
+    }
+
+    if (specialistUser?.email) {
+      try {
+        specialistEmailResult = await sendStorefrontOwnerBookingNotificationEmail({
+          to: specialistUser.email,
           customerName: cName,
           customerEmail: cEmail,
           customerPhone: phone,
@@ -253,31 +300,7 @@ export const createHairAppointment = async (req, res) => {
           location: specialistProfile.location || 'StyleVault booking',
           price: bookingSelections.totalPrice,
           currency: specialistProfile.currency || 'USD',
-        }),
-      });
-    } catch (err) {
-      adminEmailError = err.message;
-      console.error('Hair admin booking email failed:', err.message);
-    }
-
-    if (specialistUser?.email) {
-      try {
-        specialistEmailResult = await sendEmail({
-          to: specialistUser.email,
-          subject: `New appointment booked with you: ${cName}`,
-          html: adminAppointmentNotificationTemplate({
-            customerName: cName,
-            customerEmail: cEmail,
-            customerPhone: phone,
-            providerName: specialistProfile.name,
-            providerLabel: 'Hair Specialist',
-            serviceName: service.name,
-            appointmentDate: date,
-            appointmentTime: time,
-            location: specialistProfile.location || 'StyleVault booking',
-            price: bookingSelections.totalPrice,
-            currency: specialistProfile.currency || 'USD',
-          }),
+          dashboardLink: buildDashboardUrl('/hair-specialists/admin/appointments'),
         });
       } catch (err) {
         specialistEmailError = err.message;
@@ -315,6 +338,39 @@ export const createHairAppointment = async (req, res) => {
       specialistPushError = 'Hair specialist account is not configured';
     }
 
+    try {
+      customerPushResult = await sendPushNotificationToEntries({
+        entries: customer.notificationSubscriptions,
+        title: 'Booking confirmed',
+        body: `${service.name} with ${specialistProfile.name} is confirmed for ${date} at ${time}.`,
+        data: {
+          type: 'appointment',
+          action: 'confirmed',
+          appointmentId: appointment._id.toString(),
+          providerRole: 'hair-specialist',
+          providerId: hairSpecialistId,
+          customerName: cName,
+          serviceName: service.name,
+          appointmentDate: date,
+          appointmentTime: time,
+          link: manageLink,
+        },
+        link: manageLink,
+        pruneInvalidTokens: async (invalidTokens) => {
+          await HairCustomer.findByIdAndUpdate(customer._id, {
+            $pull: {
+              notificationSubscriptions: {
+                token: { $in: invalidTokens },
+              },
+            },
+          });
+        },
+      });
+    } catch (err) {
+      customerPushError = err.message;
+      console.error('Hair customer push notification failed:', err.message);
+    }
+
     emitHairSpecialistUpdate(hairSpecialistId, {
       type: 'appointment',
       action: 'created',
@@ -327,6 +383,7 @@ export const createHairAppointment = async (req, res) => {
 
     res.status(201).json({
       appointment,
+      manageLink,
       emailResult,
       emailError,
       adminEmailResult,
@@ -335,6 +392,8 @@ export const createHairAppointment = async (req, res) => {
       specialistEmailError,
       specialistPushResult,
       specialistPushError,
+      customerPushResult,
+      customerPushError,
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ message: error.message });
@@ -551,22 +610,26 @@ export const resendHairConfirmationEmail = async (req, res) => {
     let emailError = null;
 
     try {
-      const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-      emailResult = await sendEmail({
+      const accessToken = await ensureBookingManagementToken(appointment);
+      const manageLink = buildStorefrontManageBookingUrl({
+        slug: hairSpecialist?.slug,
+        providerPath: 'hair-specialists',
+        providerType: 'hair-specialist',
+        appointmentId: appointment._id.toString(),
+        accessToken,
+      });
+      emailResult = await sendCustomerBookingConfirmationEmail({
         to: appointment.customerEmail,
-        subject: 'Your appointment is confirmed',
-        html: bookingConfirmationTemplate({
-          customerName: appointment.customerName,
-          providerName: hairSpecialist?.name || 'StyleVault',
-          providerLabel: 'Hair Specialist',
-          serviceName: appointment.serviceId?.name || 'Appointment',
-          appointmentDate: appointment.date,
-          appointmentTime: appointment.time,
-          location: hairSpecialist?.location || 'StyleVault booking',
-          price: appointment.price || appointment.serviceId?.price || 0,
-          currency: hairSpecialist?.currency || 'USD',
-          manageLink: `${appBaseUrl}/hair-specialists/${hairSpecialist?.slug}`,
-        }),
+        customerName: appointment.customerName,
+        providerName: hairSpecialist?.name || 'StyleVault',
+        providerLabel: 'Hair Specialist',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: hairSpecialist?.location || 'StyleVault booking',
+        price: appointment.price || appointment.serviceId?.price || 0,
+        currency: hairSpecialist?.currency || 'USD',
+        manageLink,
       });
     } catch (err) {
       emailError = err.message;

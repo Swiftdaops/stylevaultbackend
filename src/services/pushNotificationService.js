@@ -21,14 +21,14 @@ const buildAppUrl = (path = '/') => {
   return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 };
 
-export const sendUserPushNotification = async ({ user, title, body, data = {}, link = '/' }) => {
-  if (!user?._id) {
-    return { sent: false, reason: 'user-missing' };
-  }
+const getTokensFromEntries = (entries = []) => (
+  Array.isArray(entries)
+    ? entries.map((entry) => entry?.token).filter(Boolean)
+    : []
+);
 
-  const tokens = Array.isArray(user.notificationTokens)
-    ? user.notificationTokens.map((entry) => entry?.token).filter(Boolean)
-    : [];
+export const sendPushNotificationToEntries = async ({ entries, title, body, data = {}, link = '/', pruneInvalidTokens }) => {
+  const tokens = getTokensFromEntries(entries);
 
   if (!tokens.length) {
     return { sent: false, reason: 'no-device-tokens' };
@@ -67,14 +67,8 @@ export const sendUserPushNotification = async ({ user, title, body, data = {}, l
     }
   });
 
-  if (invalidTokens.length) {
-    await User.findByIdAndUpdate(user._id, {
-      $pull: {
-        notificationTokens: {
-          token: { $in: invalidTokens },
-        },
-      },
-    });
+  if (invalidTokens.length && typeof pruneInvalidTokens === 'function') {
+    await pruneInvalidTokens(invalidTokens);
   }
 
   return {
@@ -83,4 +77,27 @@ export const sendUserPushNotification = async ({ user, title, body, data = {}, l
     failedCount: result.failureCount,
     invalidTokens,
   };
+};
+
+export const sendUserPushNotification = async ({ user, title, body, data = {}, link = '/' }) => {
+  if (!user?._id) {
+    return { sent: false, reason: 'user-missing' };
+  }
+
+  return sendPushNotificationToEntries({
+    entries: user.notificationTokens,
+    title,
+    body,
+    data,
+    link,
+    pruneInvalidTokens: async (invalidTokens) => {
+      await User.findByIdAndUpdate(user._id, {
+        $pull: {
+          notificationTokens: {
+            token: { $in: invalidTokens },
+          },
+        },
+      });
+    },
+  });
 };

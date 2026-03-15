@@ -9,13 +9,16 @@ import {
   resendHairConfirmationEmail,
   updateHairAppointment,
 } from '../controllers/hairAppointmentController.js';
+import { getPublicHairBooking, updatePublicHairBooking } from '../controllers/publicBookingController.js';
 
 const router = express.Router();
 
 router.post('/', createHairAppointment);
 router.get('/', authMiddleware, getHairAppointments);
+router.get('/public/:id', getPublicHairBooking);
 router.get('/calendar', getHairCalendarAppointments);
 router.get('/availability', checkHairAvailability);
+router.patch('/public/:id', updatePublicHairBooking);
 router.patch('/:id', authMiddleware, updateHairAppointment);
 router.patch('/:id/cancel', authMiddleware, cancelHairAppointment);
 router.post('/:id/resend-email', authMiddleware, resendHairConfirmationEmail);

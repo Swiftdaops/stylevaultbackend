@@ -48,25 +48,26 @@ const summaryRow = (label, value, isLast = false) => `
   </tr>
 `;
 
-export const bookingConfirmationTemplate = ({
+export const storefrontOwnerBookingNotificationTemplate = ({
   customerName,
-  barberName,
+  customerEmail,
+  customerPhone,
   providerName,
-  providerLabel = 'Barber',
+  providerLabel = 'Storefront',
   serviceName,
   appointmentDate,
   appointmentTime,
   location,
   price,
   currency = 'USD',
-  manageLink,
+  dashboardLink,
 }) => `
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Appointment Confirmed</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>New booking for ${escapeHtml(providerName)}</title>
 </head>
 <body style="margin:0; padding:0; background:#f5f6fa; font-family:Arial,Helvetica,sans-serif; color:#111827;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f6fa; padding:24px 12px;">
@@ -75,19 +76,22 @@ export const bookingConfirmationTemplate = ({
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px; background:#ffffff; border-radius:16px; overflow:hidden;">
           <tr>
             <td style="background:#111111; padding:28px 32px; text-align:center; color:#ffffff; font-size:24px; font-weight:700;">
-              StyleVault
+              New booking received
             </td>
           </tr>
           <tr>
             <td style="padding:32px;">
-              <div style="font-size:28px; line-height:1.2; font-weight:700; margin-bottom:12px;">Your appointment is confirmed</div>
-              <div style="font-size:16px; line-height:1.7; color:#4b5563; margin-bottom:24px;">Hello ${escapeHtml(customerName)}, your booking has been confirmed successfully. Here are your appointment details.</div>
+              <div style="font-size:28px; line-height:1.2; font-weight:700; margin-bottom:12px;">${escapeHtml(customerName)} booked with you</div>
+              <div style="font-size:16px; line-height:1.7; color:#4b5563; margin-bottom:24px;">Your ${escapeHtml(providerLabel.toLowerCase())} storefront has a new confirmed booking.</div>
 
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:14px; padding:0 20px;">
                 <tr>
                   <td style="padding:20px;">
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                      ${summaryRow(providerLabel, providerName || barberName)}
+                      ${summaryRow('Customer', customerName)}
+                      ${summaryRow('Email', customerEmail)}
+                      ${summaryRow('Phone', customerPhone || 'Not provided')}
+                      ${summaryRow(providerLabel, providerName)}
                       ${summaryRow('Service', serviceName)}
                       ${summaryRow('Date', formatAppointmentDate(appointmentDate))}
                       ${summaryRow('Time', formatAppointmentTime(appointmentTime))}
@@ -98,20 +102,20 @@ export const bookingConfirmationTemplate = ({
                 </tr>
               </table>
 
-              <table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:24px;">
-                <tr>
-                  <td align="center" bgcolor="#111111" style="border-radius:999px;">
-                    <a href="${escapeHtml(manageLink)}" style="display:inline-block; padding:14px 24px; color:#ffffff; text-decoration:none; font-size:14px; font-weight:700;">Open booking manager</a>
-                  </td>
-                </tr>
-              </table>
-
-              <div style="margin-top:16px; color:#6b7280; font-size:13px; line-height:1.6;">Use the booking manager to review your booking, reschedule, or cancel if your plans change.</div>
+              ${dashboardLink ? `
+                <table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:24px;">
+                  <tr>
+                    <td align="center" bgcolor="#111111" style="border-radius:999px;">
+                      <a href="${escapeHtml(dashboardLink)}" style="display:inline-block; padding:14px 24px; color:#ffffff; text-decoration:none; font-size:14px; font-weight:700;">Open dashboard</a>
+                    </td>
+                  </tr>
+                </table>
+              ` : ''}
             </td>
           </tr>
           <tr>
             <td style="padding:0 32px 32px; color:#6b7280; font-size:12px; line-height:1.6; text-align:center;">
-              Need help? Contact support@stylevault.site<br />© ${new Date().getFullYear()} StyleVault
+              StyleVault storefront owner notification
             </td>
           </tr>
         </table>
@@ -122,4 +126,4 @@ export const bookingConfirmationTemplate = ({
 </html>
 `;
 
-export default bookingConfirmationTemplate;
+export default storefrontOwnerBookingNotificationTemplate;

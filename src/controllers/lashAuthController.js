@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import LashTechnician from '../models/LashTechnician.js';
 import User from '../models/User.js';
 import { getAuthCookieOptions } from '../utils/authCookies.js';
+import { changeAccountPassword, findUserByNormalizedEmail, normalizeEmailAddress } from '../utils/authAccount.js';
+import { buildTakenBrandResponse, findExistingBrand } from '../utils/brandIdentity.js';
 import { mergeWhatsappSocialLink, normalizeCountryCode, resolveCurrencyInput } from '../utils/profileOptions.js';
 
 const generateToken = (user) => jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -11,18 +13,29 @@ export const registerLashTechnician = async (req, res) => {
   const { name, email, password, slug, location, bio, specialties = [], whatsapp, country, currency } = req.body;
 
   try {
-    const existingUser = await User.findOne({ email });
+    const normalizedEmail = normalizeEmailAddress(email);
+    const existingUser = await findUserByNormalizedEmail(normalizedEmail);
     if (existingUser) return res.status(400).json({ message: 'Email already exists' });
 
-    const existingSlug = await LashTechnician.findOne({ slug });
-    if (existingSlug) return res.status(400).json({ message: 'Slug already exists' });
+    const { normalizedName, normalizedSlug, existingName, existingSlug } = await findExistingBrand(LashTechnician, { name, slug });
+    if (!normalizedName || !normalizedSlug) {
+      return res.status(400).json({ field: 'name', message: 'Brand name is required' });
+    }
+    if (existingName || existingSlug) {
+      return res.status(400).json(buildTakenBrandResponse({
+        name: normalizedName,
+        slug: normalizedSlug,
+        existingName,
+        existingSlug,
+      }));
+    }
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const normalizedCountry = normalizeCountryCode(country);
     const resolvedCurrency = resolveCurrencyInput({ currency, country: normalizedCountry });
     const lashTechnician = await LashTechnician.create({
-      name,
-      slug,
+      name: normalizedName,
+      slug: normalizedSlug,
       location,
       whatsapp,
       country: normalizedCountry || undefined,
@@ -33,7 +46,7 @@ export const registerLashTechnician = async (req, res) => {
     });
 
     const user = await User.create({
-      email,
+      email: normalizedEmail,
       password: hashedPassword,
       role: 'lash-technician',
       lashTechnicianId: lashTechnician._id,
@@ -43,8 +56,12 @@ export const registerLashTechnician = async (req, res) => {
     const cookieOptions = getAuthCookieOptions(req);
 
     res.cookie('token', token, cookieOptions);
-    res.status(201).json({ user: { email, role: user.role }, lashTechnician });
+    res.status(201).json({ user: { email: normalizedEmail, role: user.role }, lashTechnician });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(400).json(buildTakenBrandResponse({ name, slug, existingSlug: true }));
+    }
+
     res.status(500).json({ message: error.message });
   }
 };
@@ -53,7 +70,8 @@ export const loginLashTechnician = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const user = await User.findOne({ email, role: 'lash-technician' });
+    const normalizedEmail = normalizeEmailAddress(email);
+    const user = await User.findOne({ email: normalizedEmail, role: 'lash-technician' });
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -65,7 +83,25 @@ export const loginLashTechnician = async (req, res) => {
     res.cookie('token', token, cookieOptions);
 
     const lashTechnician = await LashTechnician.findById(user.lashTechnicianId);
-    res.json({ user: { email, role: user.role }, lashTechnician });
+    res.json({ user: { email: normalizedEmail, role: user.role }, lashTechnician });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const checkLashTechnicianEmailAvailability = async (req, res) => {
+  try {
+    const normalizedEmail = normalizeEmailAddress(req.query?.email || req.body?.email);
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const existingUser = await findUserByNormalizedEmail(normalizedEmail);
+
+    res.json({
+      available: !existingUser,
+      message: existingUser ? 'Email is already registered' : 'Email is available',
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -89,5 +125,20 @@ export const getMeLashTechnician = async (req, res) => {
     res.json({ user: { email: user.email, role: user.role }, lashTechnician });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const changeLashTechnicianPassword = async (req, res) => {
+  try {
+    await changeAccountPassword({
+      userId: req.user.id,
+      role: 'lash-technician',
+      currentPassword: req.body?.currentPassword,
+      newPassword: req.body?.newPassword,
+    });
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
   }
 };

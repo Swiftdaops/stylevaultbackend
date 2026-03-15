@@ -4,10 +4,16 @@ import NailService from '../models/NailService.js';
 import NailTechnician from '../models/NailTechnician.js';
 import User from '../models/User.js';
 import { sendEmail } from '../services/emailService.js';
-import { sendUserPushNotification } from '../services/pushNotificationService.js';
+import {
+  sendAdminBookingNotificationEmail,
+  sendCustomerBookingConfirmationEmail,
+  sendStorefrontOwnerBookingNotificationEmail,
+} from '../services/bookingNotificationService.js';
+import { sendPushNotificationToEntries, sendUserPushNotification } from '../services/pushNotificationService.js';
 import { emitNailTechnicianUpdate } from '../socket/index.js';
-import { bookingConfirmationTemplate } from '../templates/bookingConfirmationEmail.js';
-import { adminAppointmentNotificationTemplate } from '../templates/adminAppointmentNotificationEmail.js';
+import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
+import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
+import { buildDashboardUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -57,7 +63,9 @@ const getAdminBookingEmail = () => (
   || 'stylevaultlite@gmail.com'
 );
 
-const upsertCustomer = async ({ nailTechnicianId, name, email, phone }) => {
+const MAX_NOTIFICATION_SUBSCRIPTIONS = 10;
+
+const upsertCustomer = async ({ nailTechnicianId, name, email, phone, notificationPreference, req }) => {
   let customer = await NailCustomer.findOne({ nailTechnicianId, email });
 
   if (!customer) {
@@ -66,11 +74,17 @@ const upsertCustomer = async ({ nailTechnicianId, name, email, phone }) => {
       name,
       email,
       phone: phone || undefined,
+      notificationSubscriptions: upsertNotificationDeviceEntries([], notificationPreference, { req, maxItems: MAX_NOTIFICATION_SUBSCRIPTIONS }),
       visitHistory: [],
     });
   } else {
     customer.name = name || customer.name;
     if (phone) customer.phone = phone;
+    customer.notificationSubscriptions = upsertNotificationDeviceEntries(
+      customer.notificationSubscriptions,
+      notificationPreference,
+      { req, maxItems: MAX_NOTIFICATION_SUBSCRIPTIONS }
+    );
     await customer.save();
   }
 
@@ -153,6 +167,7 @@ export const createNailAppointment = async (req, res) => {
       name,
       email,
       phone,
+      notificationPreference,
       nailTechnicianId: bodyNailTechnicianId,
       nailTechnician,
       slug,
@@ -182,7 +197,14 @@ export const createNailAppointment = async (req, res) => {
     const exists = await NailAppointment.findOne({ nailTechnicianId, date, time, status: { $ne: 'cancelled' } });
     if (exists) return res.status(400).json({ message: 'Time slot already booked' });
 
-    const customer = await upsertCustomer({ nailTechnicianId, name: cName, email: cEmail, phone });
+    const customer = await upsertCustomer({
+      nailTechnicianId,
+      name: cName,
+      email: cEmail,
+      phone,
+      notificationPreference,
+      req,
+    });
     const bookingSelections = resolveBookingSelections(service, req.body);
 
     const appointment = await NailAppointment.create({
@@ -193,6 +215,7 @@ export const createNailAppointment = async (req, res) => {
       customerId: customer._id,
       customerName: cName,
       customerEmail: cEmail,
+      managementToken: generateBookingManagementToken(),
       price: bookingSelections.totalPrice,
       selectedPricingOption: bookingSelections.selectedPricingOption,
       selectedAddOns: bookingSelections.selectedAddOns,
@@ -212,25 +235,30 @@ export const createNailAppointment = async (req, res) => {
     let technicianEmailError = null;
     let technicianPushResult = null;
     let technicianPushError = null;
+    let customerPushResult = null;
+    let customerPushError = null;
 
-    const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+    const manageLink = buildStorefrontManageBookingUrl({
+      slug: technicianProfile.slug,
+      providerPath: 'nail-technicians',
+      providerType: 'nail-technician',
+      appointmentId: appointment._id.toString(),
+      accessToken: appointment.managementToken,
+    });
 
     try {
-      emailResult = await sendEmail({
+      emailResult = await sendCustomerBookingConfirmationEmail({
         to: cEmail,
-        subject: 'Your appointment is confirmed',
-        html: bookingConfirmationTemplate({
-          customerName: cName,
-          providerName: technicianProfile.name,
-          providerLabel: 'Nail Technician',
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: technicianProfile.location || 'StyleVault booking',
-          price: bookingSelections.totalPrice,
-          currency: technicianProfile.currency || 'USD',
-          manageLink: `${appBaseUrl}/nail-technicians/${technicianProfile.slug}`,
-        }),
+        customerName: cName,
+        providerName: technicianProfile.name,
+        providerLabel: 'Nail Technician',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: technicianProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: technicianProfile.currency || 'USD',
+        manageLink,
       });
     } catch (err) {
       emailError = err.message;
@@ -238,10 +266,29 @@ export const createNailAppointment = async (req, res) => {
     }
 
     try {
-      adminEmailResult = await sendEmail({
+      adminEmailResult = await sendAdminBookingNotificationEmail({
         to: getAdminBookingEmail(),
-        subject: `New appointment: ${cName} booked ${service.name}`,
-        html: adminAppointmentNotificationTemplate({
+        customerName: cName,
+        customerEmail: cEmail,
+        customerPhone: phone,
+        providerName: technicianProfile.name,
+        providerLabel: 'Nail Technician',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: technicianProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: technicianProfile.currency || 'USD',
+      });
+    } catch (err) {
+      adminEmailError = err.message;
+      console.error('Nail admin booking email failed:', err.message);
+    }
+
+    if (technicianUser?.email) {
+      try {
+        technicianEmailResult = await sendStorefrontOwnerBookingNotificationEmail({
+          to: technicianUser.email,
           customerName: cName,
           customerEmail: cEmail,
           customerPhone: phone,
@@ -253,31 +300,7 @@ export const createNailAppointment = async (req, res) => {
           location: technicianProfile.location || 'StyleVault booking',
           price: bookingSelections.totalPrice,
           currency: technicianProfile.currency || 'USD',
-        }),
-      });
-    } catch (err) {
-      adminEmailError = err.message;
-      console.error('Nail admin booking email failed:', err.message);
-    }
-
-    if (technicianUser?.email) {
-      try {
-        technicianEmailResult = await sendEmail({
-          to: technicianUser.email,
-          subject: `New appointment booked with you: ${cName}`,
-          html: adminAppointmentNotificationTemplate({
-            customerName: cName,
-            customerEmail: cEmail,
-            customerPhone: phone,
-            providerName: technicianProfile.name,
-            providerLabel: 'Nail Technician',
-            serviceName: service.name,
-            appointmentDate: date,
-            appointmentTime: time,
-            location: technicianProfile.location || 'StyleVault booking',
-            price: bookingSelections.totalPrice,
-            currency: technicianProfile.currency || 'USD',
-          }),
+          dashboardLink: buildDashboardUrl('/nail-technicians/admin/appointments'),
         });
       } catch (err) {
         technicianEmailError = err.message;
@@ -315,6 +338,39 @@ export const createNailAppointment = async (req, res) => {
       technicianPushError = 'Nail technician account is not configured';
     }
 
+    try {
+      customerPushResult = await sendPushNotificationToEntries({
+        entries: customer.notificationSubscriptions,
+        title: 'Booking confirmed',
+        body: `${service.name} with ${technicianProfile.name} is confirmed for ${date} at ${time}.`,
+        data: {
+          type: 'appointment',
+          action: 'confirmed',
+          appointmentId: appointment._id.toString(),
+          providerRole: 'nail-technician',
+          providerId: nailTechnicianId,
+          customerName: cName,
+          serviceName: service.name,
+          appointmentDate: date,
+          appointmentTime: time,
+          link: manageLink,
+        },
+        link: manageLink,
+        pruneInvalidTokens: async (invalidTokens) => {
+          await NailCustomer.findByIdAndUpdate(customer._id, {
+            $pull: {
+              notificationSubscriptions: {
+                token: { $in: invalidTokens },
+              },
+            },
+          });
+        },
+      });
+    } catch (err) {
+      customerPushError = err.message;
+      console.error('Nail customer push notification failed:', err.message);
+    }
+
     emitNailTechnicianUpdate(nailTechnicianId, {
       type: 'appointment',
       action: 'created',
@@ -327,6 +383,7 @@ export const createNailAppointment = async (req, res) => {
 
     res.status(201).json({
       appointment,
+      manageLink,
       emailResult,
       emailError,
       adminEmailResult,
@@ -335,6 +392,8 @@ export const createNailAppointment = async (req, res) => {
       technicianEmailError,
       technicianPushResult,
       technicianPushError,
+      customerPushResult,
+      customerPushError,
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ message: error.message });
@@ -551,22 +610,26 @@ export const resendNailConfirmationEmail = async (req, res) => {
     let emailError = null;
 
     try {
-      const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-      emailResult = await sendEmail({
+      const accessToken = await ensureBookingManagementToken(appointment);
+      const manageLink = buildStorefrontManageBookingUrl({
+        slug: nailTechnician?.slug,
+        providerPath: 'nail-technicians',
+        providerType: 'nail-technician',
+        appointmentId: appointment._id.toString(),
+        accessToken,
+      });
+      emailResult = await sendCustomerBookingConfirmationEmail({
         to: appointment.customerEmail,
-        subject: 'Your appointment is confirmed',
-        html: bookingConfirmationTemplate({
-          customerName: appointment.customerName,
-          providerName: nailTechnician?.name || 'StyleVault',
-          providerLabel: 'Nail Technician',
-          serviceName: appointment.serviceId?.name || 'Appointment',
-          appointmentDate: appointment.date,
-          appointmentTime: appointment.time,
-          location: nailTechnician?.location || 'StyleVault booking',
-          price: appointment.price || appointment.serviceId?.price || 0,
-          currency: nailTechnician?.currency || 'USD',
-          manageLink: `${appBaseUrl}/nail-technicians/${nailTechnician?.slug}`,
-        }),
+        customerName: appointment.customerName,
+        providerName: nailTechnician?.name || 'StyleVault',
+        providerLabel: 'Nail Technician',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: nailTechnician?.location || 'StyleVault booking',
+        price: appointment.price || appointment.serviceId?.price || 0,
+        currency: nailTechnician?.currency || 'USD',
+        manageLink,
       });
     } catch (err) {
       emailError = err.message;

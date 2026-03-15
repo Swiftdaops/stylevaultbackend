@@ -5,10 +5,16 @@ import Customer from '../models/Customer.js';
 import Service from '../models/Service.js';
 import User from '../models/User.js';
 import { sendEmail } from '../services/emailService.js';
-import { sendUserPushNotification } from '../services/pushNotificationService.js';
+import {
+  sendAdminBookingNotificationEmail,
+  sendCustomerBookingConfirmationEmail,
+  sendStorefrontOwnerBookingNotificationEmail,
+} from '../services/bookingNotificationService.js';
+import { sendPushNotificationToEntries, sendUserPushNotification } from '../services/pushNotificationService.js';
 import { emitBarberUpdate } from '../socket/index.js';
-import { bookingConfirmationTemplate } from '../templates/bookingConfirmationEmail.js';
-import { adminAppointmentNotificationTemplate } from '../templates/adminAppointmentNotificationEmail.js';
+import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
+import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
+import { buildDashboardUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -59,7 +65,9 @@ const getAdminBookingEmail = () => (
   || 'stylevaultlite@gmail.com'
 );
 
-const upsertCustomer = async ({ barberId, name, email, phone }) => {
+const MAX_NOTIFICATION_SUBSCRIPTIONS = 10;
+
+const upsertCustomer = async ({ barberId, name, email, phone, notificationPreference, req }) => {
   let customer = await Customer.findOne({ barberId, email });
 
   if (!customer) {
@@ -68,11 +76,17 @@ const upsertCustomer = async ({ barberId, name, email, phone }) => {
       name,
       email,
       phone: phone || undefined,
+      notificationSubscriptions: upsertNotificationDeviceEntries([], notificationPreference, { req, maxItems: MAX_NOTIFICATION_SUBSCRIPTIONS }),
       visitHistory: [],
     });
   } else {
     customer.name = name || customer.name;
     if (phone) customer.phone = phone;
+    customer.notificationSubscriptions = upsertNotificationDeviceEntries(
+      customer.notificationSubscriptions,
+      notificationPreference,
+      { req, maxItems: MAX_NOTIFICATION_SUBSCRIPTIONS }
+    );
     await customer.save();
   }
 
@@ -122,6 +136,7 @@ export const createAppointment = async (req, res) => {
       name,
       email,
       phone,
+      notificationPreference,
       barberId: bodyBarberId,
       barber,
       slug,
@@ -151,7 +166,14 @@ export const createAppointment = async (req, res) => {
     if (exists) return res.status(400).json({ message: 'Time slot already booked' });
 
     // Upsert customer (match by email within barber)
-    const customer = await upsertCustomer({ barberId, name: cName, email: cEmail, phone });
+    const customer = await upsertCustomer({
+      barberId,
+      name: cName,
+      email: cEmail,
+      phone,
+      notificationPreference,
+      req,
+    });
 
     const appointment = await Appointment.create({
       barberId,
@@ -161,6 +183,7 @@ export const createAppointment = async (req, res) => {
       customerId: customer._id,
       customerName: cName,
       customerEmail: cEmail,
+      managementToken: generateBookingManagementToken(),
       price: typeof price === 'number' ? price : service.price,
       status: 'confirmed',
     });
@@ -179,24 +202,29 @@ export const createAppointment = async (req, res) => {
     let barberEmailError = null;
     let barberPushResult = null;
     let barberPushError = null;
-    const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+    let customerPushResult = null;
+    let customerPushError = null;
     const appointmentPrice = typeof price === 'number' ? price : service.price;
+    const manageLink = buildStorefrontManageBookingUrl({
+      slug: barberProfile.slug,
+      providerPath: 'barbers',
+      providerType: 'barber',
+      appointmentId: appointment._id.toString(),
+      accessToken: appointment.managementToken,
+    });
 
     try {
-      emailResult = await sendEmail({
+      emailResult = await sendCustomerBookingConfirmationEmail({
         to: cEmail,
-        subject: 'Your appointment is confirmed',
-        html: bookingConfirmationTemplate({
-          customerName: cName,
-          barberName: barberProfile.name,
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: barberProfile.location || 'StyleVault booking',
-          price: appointmentPrice,
-          currency: barberProfile.currency || 'USD',
-          manageLink: `${appBaseUrl}/barbers/${barberProfile.slug}`,
-        }),
+        customerName: cName,
+        barberName: barberProfile.name,
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: barberProfile.location || 'StyleVault booking',
+        price: appointmentPrice,
+        currency: barberProfile.currency || 'USD',
+        manageLink,
       });
     } catch (err) {
       emailError = err.message;
@@ -204,21 +232,18 @@ export const createAppointment = async (req, res) => {
     }
 
     try {
-      adminEmailResult = await sendEmail({
+      adminEmailResult = await sendAdminBookingNotificationEmail({
         to: getAdminBookingEmail(),
-        subject: `New appointment: ${cName} booked ${service.name}`,
-        html: adminAppointmentNotificationTemplate({
-          customerName: cName,
-          customerEmail: cEmail,
-          customerPhone: phone,
-          barberName: barberProfile.name,
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: barberProfile.location || 'StyleVault booking',
-          price: appointmentPrice,
-          currency: barberProfile.currency || 'USD',
-        }),
+        customerName: cName,
+        customerEmail: cEmail,
+        customerPhone: phone,
+        barberName: barberProfile.name,
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: barberProfile.location || 'StyleVault booking',
+        price: appointmentPrice,
+        currency: barberProfile.currency || 'USD',
       });
     } catch (err) {
       adminEmailError = err.message;
@@ -227,21 +252,20 @@ export const createAppointment = async (req, res) => {
 
     if (barberUser?.email) {
       try {
-        barberEmailResult = await sendEmail({
+        barberEmailResult = await sendStorefrontOwnerBookingNotificationEmail({
           to: barberUser.email,
-          subject: `New appointment booked with you: ${cName}`,
-          html: adminAppointmentNotificationTemplate({
-            customerName: cName,
-            customerEmail: cEmail,
-            customerPhone: phone,
-            barberName: barberProfile.name,
-            serviceName: service.name,
-            appointmentDate: date,
-            appointmentTime: time,
-            location: barberProfile.location || 'StyleVault booking',
-            price: appointmentPrice,
-            currency: barberProfile.currency || 'USD',
-          }),
+          customerName: cName,
+          customerEmail: cEmail,
+          customerPhone: phone,
+          providerName: barberProfile.name,
+          providerLabel: 'Barber',
+          serviceName: service.name,
+          appointmentDate: date,
+          appointmentTime: time,
+          location: barberProfile.location || 'StyleVault booking',
+          price: appointmentPrice,
+          currency: barberProfile.currency || 'USD',
+          dashboardLink: buildDashboardUrl('/barbers/admin/appointments'),
         });
       } catch (err) {
         barberEmailError = err.message;
@@ -279,6 +303,39 @@ export const createAppointment = async (req, res) => {
       barberPushError = 'Barber account is not configured';
     }
 
+    try {
+      customerPushResult = await sendPushNotificationToEntries({
+        entries: customer.notificationSubscriptions,
+        title: 'Booking confirmed',
+        body: `${service.name} with ${barberProfile.name} is confirmed for ${date} at ${time}.`,
+        data: {
+          type: 'appointment',
+          action: 'confirmed',
+          appointmentId: appointment._id.toString(),
+          providerRole: 'barber',
+          providerId: barberId,
+          customerName: cName,
+          serviceName: service.name,
+          appointmentDate: date,
+          appointmentTime: time,
+          link: manageLink,
+        },
+        link: manageLink,
+        pruneInvalidTokens: async (invalidTokens) => {
+          await Customer.findByIdAndUpdate(customer._id, {
+            $pull: {
+              notificationSubscriptions: {
+                token: { $in: invalidTokens },
+              },
+            },
+          });
+        },
+      });
+    } catch (err) {
+      customerPushError = err.message;
+      console.error('Customer push notification failed:', err.message);
+    }
+
     emitBarberUpdate(barberId, {
       type: 'appointment',
       action: 'created',
@@ -291,6 +348,7 @@ export const createAppointment = async (req, res) => {
 
     res.status(201).json({
       appointment,
+      manageLink,
       emailResult,
       emailError,
       adminEmailResult,
@@ -299,6 +357,8 @@ export const createAppointment = async (req, res) => {
       barberEmailError,
       barberPushResult,
       barberPushError,
+      customerPushResult,
+      customerPushError,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -524,23 +584,27 @@ export const resendConfirmationEmail = async (req, res) => {
     let emailError = null;
 
     try {
-      const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+      const accessToken = await ensureBookingManagementToken(appointment);
       const appointmentPrice = appointment.price || appointment.serviceId?.price || 0;
+      const manageLink = buildStorefrontManageBookingUrl({
+        slug: barberProfile?.slug,
+        providerPath: 'barbers',
+        providerType: 'barber',
+        appointmentId: appointment._id.toString(),
+        accessToken,
+      });
 
-      emailResult = await sendEmail({
+      emailResult = await sendCustomerBookingConfirmationEmail({
         to: appointment.customerEmail,
-        subject: 'Your appointment is confirmed',
-        html: bookingConfirmationTemplate({
-          customerName: appointment.customerName,
-          barberName: barberProfile?.name || 'StyleVault',
-          serviceName: appointment.serviceId?.name || 'Appointment',
-          appointmentDate: appointment.date,
-          appointmentTime: appointment.time,
-          location: barberProfile?.location || 'StyleVault booking',
-          price: appointmentPrice,
-          currency: barberProfile?.currency || 'USD',
-          manageLink: `${appBaseUrl}/barbers/${barberProfile?.slug}`,
-        }),
+        customerName: appointment.customerName,
+        barberName: barberProfile?.name || 'StyleVault',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: barberProfile?.location || 'StyleVault booking',
+        price: appointmentPrice,
+        currency: barberProfile?.currency || 'USD',
+        manageLink,
       });
     } catch (err) {
       emailError = err.message;

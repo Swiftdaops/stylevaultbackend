@@ -1,6 +1,39 @@
 import User from '../models/User.js';
+import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
 
 const MAX_NOTIFICATION_TOKENS = 10;
+
+const buildDevicePayload = (req) => ({
+  token: req.body?.token,
+  permission: req.body?.permission,
+  platform: req.body?.platform,
+  language: req.body?.language,
+  scope: req.body?.scope,
+});
+
+export const saveDevicePreference = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.notificationTokens = upsertNotificationDeviceEntries(
+      user.notificationTokens,
+      buildDevicePayload(req),
+      { req, maxItems: MAX_NOTIFICATION_TOKENS }
+    );
+
+    await user.save();
+
+    res.json({
+      message: 'Notification preference saved',
+      count: Array.isArray(user.notificationTokens) ? user.notificationTokens.length : 0,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 export const registerDeviceToken = async (req, res) => {
   try {
@@ -30,13 +63,15 @@ export const registerDeviceToken = async (req, res) => {
       ? user.notificationTokens.filter((entry) => entry?.token !== token)
       : [];
 
-    nextTokens.push({
-      token,
-      userAgent: req.get('user-agent') || '',
-      lastSeenAt: new Date(),
-    });
-
-    user.notificationTokens = nextTokens.slice(-MAX_NOTIFICATION_TOKENS);
+    user.notificationTokens = upsertNotificationDeviceEntries(
+      nextTokens,
+      {
+        ...buildDevicePayload(req),
+        token,
+        permission: req.body?.permission || 'granted',
+      },
+      { req, maxItems: MAX_NOTIFICATION_TOKENS }
+    );
     await user.save();
 
     res.json({

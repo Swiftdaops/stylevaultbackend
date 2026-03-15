@@ -6,6 +6,7 @@ const nailAppointmentSchema = new mongoose.Schema({
   customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'NailCustomer', required: true },
   customerName: { type: String, required: true },
   customerEmail: { type: String, required: true },
+  managementToken: { type: String, index: true },
   date: { type: String, required: true },
   time: { type: String, required: true },
   price: { type: Number, required: true },
