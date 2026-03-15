@@ -3,13 +3,13 @@ import MakeupCustomer from '../models/MakeupCustomer.js';
 import MakeupService from '../models/MakeupService.js';
 import MakeupArtist from '../models/MakeupArtist.js';
 import User from '../models/User.js';
-import { sendEmail } from '../services/emailService.js';
 import {
   sendAdminBookingNotificationEmail,
   sendCustomerBookingConfirmationEmail,
   sendStorefrontOwnerBookingNotificationEmail,
 } from '../services/bookingNotificationService.js';
-import { sendPushNotificationToEntries, sendUserPushNotification } from '../services/pushNotificationService.js';
+import { sendUserPushNotification } from '../services/pushNotificationService.js';
+import { sendCustomerAppointmentStatusNotifications } from '../services/customerAppointmentStatusService.js';
 import { emitMakeupArtistUpdate } from '../socket/index.js';
 import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
 import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
@@ -247,25 +247,6 @@ export const createMakeupAppointment = async (req, res) => {
     });
 
     try {
-      emailResult = await sendCustomerBookingConfirmationEmail({
-        to: cEmail,
-        customerName: cName,
-        providerName: artistProfile.name,
-        providerLabel: 'Makeup Artist',
-        serviceName: service.name,
-        appointmentDate: date,
-        appointmentTime: time,
-        location: artistProfile.location || 'StyleVault booking',
-        price: bookingSelections.totalPrice,
-        currency: artistProfile.currency || 'USD',
-        manageLink,
-      });
-    } catch (err) {
-      emailError = err.message;
-      console.error('Makeup booking confirmation email failed:', err.message);
-    }
-
-    try {
       adminEmailResult = await sendAdminBookingNotificationEmail({
         to: getAdminBookingEmail(),
         customerName: cName,
@@ -339,23 +320,27 @@ export const createMakeupAppointment = async (req, res) => {
     }
 
     try {
-      customerPushResult = await sendPushNotificationToEntries({
-        entries: customer.notificationSubscriptions,
-        title: 'Booking confirmed',
-        body: `${service.name} with ${artistProfile.name} is confirmed for ${date} at ${time}.`,
-        data: {
-          type: 'appointment',
-          action: 'confirmed',
+      const customerNotification = await sendCustomerAppointmentStatusNotifications({
+        to: cEmail,
+        status: appointment.status,
+        customerName: cName,
+        providerName: artistProfile.name,
+        providerLabel: 'Makeup Artist',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: artistProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: artistProfile.currency || 'USD',
+        manageLink,
+        pushEntries: customer.notificationSubscriptions,
+        pushData: {
           appointmentId: appointment._id.toString(),
           providerRole: 'makeup-artist',
           providerId: makeupArtistId,
           customerName: cName,
           serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          link: manageLink,
         },
-        link: manageLink,
         pruneInvalidTokens: async (invalidTokens) => {
           await MakeupCustomer.findByIdAndUpdate(customer._id, {
             $pull: {
@@ -366,9 +351,15 @@ export const createMakeupAppointment = async (req, res) => {
           });
         },
       });
+
+      emailResult = customerNotification.emailResult;
+      emailError = customerNotification.emailError;
+      customerPushResult = customerNotification.pushResult;
+      customerPushError = customerNotification.pushError;
     } catch (err) {
+      emailError = err.message;
       customerPushError = err.message;
-      console.error('Makeup customer push notification failed:', err.message);
+      console.error('Makeup customer notifications failed:', err.message);
     }
 
     emitMakeupArtistUpdate(makeupArtistId, {
@@ -473,6 +464,8 @@ export const updateMakeupAppointment = async (req, res) => {
     const appointment = await MakeupAppointment.findOne({ _id: req.params.id, makeupArtistId });
     if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
 
+    const previousStatus = appointment.status;
+
     const nextDate = req.body.date || appointment.date;
     const nextTime = req.body.time || appointment.time;
 
@@ -534,6 +527,55 @@ export const updateMakeupAppointment = async (req, res) => {
 
     await appointment.save();
 
+    if (previousStatus !== appointment.status) {
+      try {
+        const makeupArtist = await MakeupArtist.findById(makeupArtistId).lean();
+        const accessToken = await ensureBookingManagementToken(appointment);
+        const manageLink = buildStorefrontManageBookingUrl({
+          slug: makeupArtist?.slug,
+          providerPath: 'makeup-artists',
+          providerType: 'makeup-artist',
+          appointmentId: appointment._id.toString(),
+          accessToken,
+        });
+        const customer = await MakeupCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
+
+        await sendCustomerAppointmentStatusNotifications({
+          to: appointment.customerEmail,
+          status: appointment.status,
+          customerName: appointment.customerName,
+          providerName: makeupArtist?.name || 'StyleVault',
+          providerLabel: 'Makeup Artist',
+          serviceName: service?.name || 'Appointment',
+          appointmentDate: appointment.date,
+          appointmentTime: appointment.time,
+          location: makeupArtist?.location || 'StyleVault booking',
+          price: appointment.price || service?.price || 0,
+          currency: makeupArtist?.currency || 'USD',
+          manageLink,
+          pushEntries: customer?.notificationSubscriptions || [],
+          pushData: {
+            appointmentId: appointment._id.toString(),
+            providerRole: 'makeup-artist',
+            providerId: makeupArtistId,
+            customerName: appointment.customerName,
+            serviceName: service?.name || 'Appointment',
+          },
+          pruneInvalidTokens: async (invalidTokens) => {
+            await MakeupCustomer.findByIdAndUpdate(appointment.customerId, {
+              $pull: {
+                notificationSubscriptions: {
+                  token: { $in: invalidTokens },
+                },
+              },
+            });
+          },
+        });
+      } catch (notificationError) {
+        console.error('Makeup customer status notifications failed:', notificationError.message);
+      }
+    }
+
     const populatedAppointment = await MakeupAppointment.findById(appointment._id)
       .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone');
@@ -563,22 +605,61 @@ export const cancelMakeupAppointment = async (req, res) => {
 
     let emailResult = null;
     let emailError = null;
+    let customerPushResult = null;
+    let customerPushError = null;
 
     try {
-      emailResult = await sendEmail({
-        to: appointment.customerEmail,
-        subject: 'Your appointment was cancelled',
-        html: `
-          <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #1f2937;">
-            <h2>Appointment Cancelled</h2>
-            <p>Hi ${appointment.customerName},</p>
-            <p>Your ${appointment.serviceId?.name || 'appointment'} on ${appointment.date} at ${appointment.time} has been cancelled.</p>
-          </div>
-        `,
+      const makeupArtist = await MakeupArtist.findById(makeupArtistId).lean();
+      const customer = await MakeupCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
+      const accessToken = await ensureBookingManagementToken(appointment);
+      const manageLink = buildStorefrontManageBookingUrl({
+        slug: makeupArtist?.slug,
+        providerPath: 'makeup-artists',
+        providerType: 'makeup-artist',
+        appointmentId: appointment._id.toString(),
+        accessToken,
       });
+
+      const notificationResult = await sendCustomerAppointmentStatusNotifications({
+        to: appointment.customerEmail,
+        status: 'cancelled',
+        customerName: appointment.customerName,
+        providerName: makeupArtist?.name || 'StyleVault',
+        providerLabel: 'Makeup Artist',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: makeupArtist?.location || 'StyleVault booking',
+        price: appointment.price || 0,
+        currency: makeupArtist?.currency || 'USD',
+        manageLink,
+        pushEntries: customer?.notificationSubscriptions || [],
+        pushData: {
+          appointmentId: appointment._id.toString(),
+          providerRole: 'makeup-artist',
+          providerId: makeupArtistId,
+          customerName: appointment.customerName,
+          serviceName: appointment.serviceId?.name || 'Appointment',
+        },
+        pruneInvalidTokens: async (invalidTokens) => {
+          await MakeupCustomer.findByIdAndUpdate(appointment.customerId, {
+            $pull: {
+              notificationSubscriptions: {
+                token: { $in: invalidTokens },
+              },
+            },
+          });
+        },
+      });
+
+      emailResult = notificationResult.emailResult;
+      emailError = notificationResult.emailError;
+      customerPushResult = notificationResult.pushResult;
+      customerPushError = notificationResult.pushError;
     } catch (err) {
       emailError = err.message;
-      console.error('Makeup cancellation email failed:', err.message);
+      customerPushError = err.message;
+      console.error('Makeup cancellation notifications failed:', err.message);
     }
 
     emitMakeupArtistUpdate(makeupArtistId, {
@@ -587,7 +668,7 @@ export const cancelMakeupAppointment = async (req, res) => {
       appointmentId: appointment._id.toString(),
     });
 
-    res.json({ appointment, emailResult, emailError });
+    res.json({ appointment, emailResult, emailError, customerPushResult, customerPushError });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -620,6 +701,7 @@ export const resendMakeupConfirmationEmail = async (req, res) => {
       });
       emailResult = await sendCustomerBookingConfirmationEmail({
         to: appointment.customerEmail,
+        status: appointment.status === 'pending' ? 'pending' : 'confirmed',
         customerName: appointment.customerName,
         providerName: makeupArtist?.name || 'StyleVault',
         providerLabel: 'Makeup Artist',

@@ -60,13 +60,14 @@ export const bookingConfirmationTemplate = ({
   price,
   currency = 'USD',
   manageLink,
+  status = 'confirmed',
 }) => `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Appointment Confirmed</title>
+  <title>${String(status).toLowerCase() === 'pending' ? 'Booking Request Received' : 'Appointment Confirmed'}</title>
 </head>
 <body style="margin:0; padding:0; background:#f5f6fa; font-family:Arial,Helvetica,sans-serif; color:#111827;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f6fa; padding:24px 12px;">
@@ -80,8 +81,8 @@ export const bookingConfirmationTemplate = ({
           </tr>
           <tr>
             <td style="padding:32px;">
-              <div style="font-size:28px; line-height:1.2; font-weight:700; margin-bottom:12px;">Your appointment is confirmed</div>
-              <div style="font-size:16px; line-height:1.7; color:#4b5563; margin-bottom:24px;">Hello ${escapeHtml(customerName)}, your booking has been confirmed successfully. Here are your appointment details.</div>
+              <div style="font-size:28px; line-height:1.2; font-weight:700; margin-bottom:12px;">${String(status).toLowerCase() === 'pending' ? 'Your booking is pending confirmation' : 'Your appointment is confirmed'}</div>
+              <div style="font-size:16px; line-height:1.7; color:#4b5563; margin-bottom:24px;">Hello ${escapeHtml(customerName)}, ${String(status).toLowerCase() === 'pending' ? 'we received your booking request. The provider will confirm it shortly.' : 'your booking has been confirmed successfully.'} Here are your appointment details.</div>
 
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:14px; padding:0 20px;">
                 <tr>
@@ -106,7 +107,7 @@ export const bookingConfirmationTemplate = ({
                 </tr>
               </table>
 
-              <div style="margin-top:16px; color:#6b7280; font-size:13px; line-height:1.6;">Use the booking manager to review your booking, reschedule, or cancel if your plans change.</div>
+              <div style="margin-top:16px; color:#6b7280; font-size:13px; line-height:1.6;">${String(status).toLowerCase() === 'pending' ? 'Once the provider confirms your booking, you will be able to reschedule or cancel from the booking manager.' : 'Use the booking manager to review your booking, reschedule, or cancel if your plans change.'}</div>
             </td>
           </tr>
           <tr>

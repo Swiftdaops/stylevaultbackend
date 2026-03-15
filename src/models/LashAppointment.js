@@ -12,7 +12,7 @@ const lashAppointmentSchema = new mongoose.Schema({
   price: { type: Number, required: true },
   selectedPricingOption: { type: String },
   selectedAddOns: { type: [String], default: [] },
-  status: { type: String, enum: ['confirmed', 'cancelled', 'completed'], default: 'confirmed' },
+  status: { type: String, enum: ['pending', 'confirmed', 'cancelled', 'completed'], default: 'pending' },
 }, { timestamps: true });
 
 lashAppointmentSchema.index({ lashTechnicianId: 1, date: 1, time: 1 }, { unique: true });

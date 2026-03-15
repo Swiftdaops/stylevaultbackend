@@ -22,7 +22,7 @@ export const createAppointment = async ({ barberId, serviceId, date, time, custo
     date,
     time,
     price,
-    status: 'confirmed',
+    status: 'pending',
   });
 
   customer.visitHistory.push(appointment._id);

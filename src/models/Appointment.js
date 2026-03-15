@@ -11,7 +11,7 @@ const appointmentSchema = new mongoose.Schema({
   date: { type: String, required: true },
   time: { type: String, required: true },
   price: { type: Number, required: true },
-  status: { type: String, enum: ['confirmed','cancelled','completed'], default: 'confirmed' },
+  status: { type: String, enum: ['pending', 'confirmed', 'cancelled', 'completed'], default: 'pending' },
 }, { timestamps: true });
 
 // Prevent double bookings at DB level

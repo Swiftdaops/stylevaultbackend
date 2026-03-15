@@ -82,7 +82,7 @@ const buildPublicResponse = ({ config, appointment, provider, accessToken }) => 
     selectedAddOns: appointment.selectedAddOns || [],
     createdAt: appointment.createdAt,
     updatedAt: appointment.updatedAt,
-    canCustomerEdit: appointment.status !== 'completed',
+    canCustomerEdit: appointment.status === 'confirmed',
     service: appointment.serviceId
       ? {
           id: appointment.serviceId._id,
@@ -167,6 +167,10 @@ const createUpdatePublicBookingHandler = (type) => async (req, res) => {
 
     if (appointment.status === 'completed') {
       return res.status(400).json({ message: 'Completed bookings can no longer be changed' });
+    }
+
+    if (appointment.status !== 'confirmed') {
+      return res.status(400).json({ message: 'This booking is pending confirmation and cannot be changed yet' });
     }
 
     const nextDate = req.body?.date || appointment.date;

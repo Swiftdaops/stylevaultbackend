@@ -3,11 +3,18 @@ import { bookingConfirmationTemplate } from '../templates/bookingConfirmationEma
 import { adminAppointmentNotificationTemplate } from '../templates/adminAppointmentNotificationEmail.js';
 import { storefrontOwnerBookingNotificationTemplate } from '../templates/storefrontOwnerBookingNotificationEmail.js';
 
-export const sendCustomerBookingConfirmationEmail = ({ to, ...templateData }) => sendEmail({
-  to,
-  subject: 'Your booking is confirmed',
-  html: bookingConfirmationTemplate(templateData),
-});
+export const sendCustomerBookingConfirmationEmail = ({ to, status = 'confirmed', ...templateData }) => {
+  const normalizedStatus = String(status || 'confirmed').toLowerCase();
+  const subject = normalizedStatus === 'pending'
+    ? 'Booking request received'
+    : 'Your booking is confirmed';
+
+  return sendEmail({
+    to,
+    subject,
+    html: bookingConfirmationTemplate({ ...templateData, status: normalizedStatus }),
+  });
+};
 
 export const sendAdminBookingNotificationEmail = ({ to, ...templateData }) => sendEmail({
   to,
