@@ -219,7 +219,7 @@ export const createMakeupAppointment = async (req, res) => {
       price: bookingSelections.totalPrice,
       selectedPricingOption: bookingSelections.selectedPricingOption,
       selectedAddOns: bookingSelections.selectedAddOns,
-      status: 'confirmed',
+      status: 'pending',
     });
 
     await MakeupService.findByIdAndUpdate(serviceId, { $inc: { bookingsCount: 1 } });

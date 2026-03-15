@@ -1,8 +1,34 @@
-const normalizeBaseUrl = () => String(process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
-
-const getBaseUrl = () => new URL(normalizeBaseUrl());
+const DEFAULT_STOREFRONT_URL = 'https://www.stylevault.site';
 
 const isLocalHost = (hostname = '') => hostname.includes('localhost') || /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
+
+const normalizeBaseUrl = () => {
+  const rawValue = String(
+    process.env.STOREFRONT_URL
+    || process.env.APP_URL
+    || process.env.FRONTEND_URL
+    || DEFAULT_STOREFRONT_URL
+  ).trim();
+
+  if (!rawValue) {
+    return DEFAULT_STOREFRONT_URL;
+  }
+
+  try {
+    const parsed = new URL(rawValue);
+    const hostname = parsed.hostname.replace(/^www\./, '');
+
+    if (process.env.NODE_ENV === 'production' && isLocalHost(hostname)) {
+      return DEFAULT_STOREFRONT_URL;
+    }
+
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return DEFAULT_STOREFRONT_URL;
+  }
+};
+
+const getBaseUrl = () => new URL(normalizeBaseUrl());
 
 export const buildStorefrontBaseUrl = ({ slug, providerPath }) => {
   const baseUrl = getBaseUrl();

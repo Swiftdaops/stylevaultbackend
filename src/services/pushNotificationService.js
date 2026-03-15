@@ -1,6 +1,10 @@
 import User from '../models/User.js';
 import { getFirebaseAdminMessaging } from '../config/firebaseAdmin.js';
 
+const DEFAULT_APP_URL = 'https://www.stylevault.site';
+
+const isLocalHost = (hostname = '') => hostname.includes('localhost') || /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
+
 const INVALID_TOKEN_ERROR_CODES = new Set([
   'messaging/invalid-registration-token',
   'messaging/registration-token-not-registered',
@@ -13,7 +17,19 @@ const normalizeData = (data = {}) => Object.fromEntries(
 );
 
 const buildAppUrl = (path = '/') => {
-  const baseUrl = String(process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  const rawBaseUrl = String(process.env.APP_URL || process.env.FRONTEND_URL || DEFAULT_APP_URL).trim();
+
+  let baseUrl = DEFAULT_APP_URL;
+
+  try {
+    const parsed = new URL(rawBaseUrl);
+    const hostname = parsed.hostname.replace(/^www\./, '');
+    baseUrl = process.env.NODE_ENV === 'production' && isLocalHost(hostname)
+      ? DEFAULT_APP_URL
+      : parsed.toString().replace(/\/+$/, '');
+  } catch {
+    baseUrl = DEFAULT_APP_URL;
+  }
 
   if (!path) return baseUrl;
   if (/^https?:\/\//i.test(path)) return path;
