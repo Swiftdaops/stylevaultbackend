@@ -1,12 +1,11 @@
-// src/controllers/appointmentController.js
-import Appointment from '../models/Appointment.js';
-import Barber from '../models/Barber.js';
-import Customer from '../models/Customer.js';
-import Service from '../models/Service.js';
+import MakeupAppointment from '../models/MakeupAppointment.js';
+import MakeupCustomer from '../models/MakeupCustomer.js';
+import MakeupService from '../models/MakeupService.js';
+import MakeupArtist from '../models/MakeupArtist.js';
 import User from '../models/User.js';
 import { sendEmail } from '../services/emailService.js';
 import { sendUserPushNotification } from '../services/pushNotificationService.js';
-import { emitBarberUpdate } from '../socket/index.js';
+import { emitMakeupArtistUpdate } from '../socket/index.js';
 import { bookingConfirmationTemplate } from '../templates/bookingConfirmationEmail.js';
 import { adminAppointmentNotificationTemplate } from '../templates/adminAppointmentNotificationEmail.js';
 
@@ -24,31 +23,30 @@ const buildDateTime = (date, time) => {
   return Number.isNaN(value.getTime()) ? null : value;
 };
 
-const resolveBarberId = async (barberReference) => {
-  if (!barberReference) return null;
+const resolveMakeupArtistId = async (makeupReference) => {
+  if (!makeupReference) return null;
 
-  if (typeof barberReference === 'object' && barberReference !== null && barberReference.toString) {
-    return barberReference.toString();
+  if (typeof makeupReference === 'object' && makeupReference !== null && makeupReference.toString) {
+    return makeupReference.toString();
   }
 
-  // If a 24-character hex string (Mongo ObjectId) is provided, treat it as the ID
-  if (typeof barberReference === 'string' && /^[0-9a-fA-F]{24}$/.test(barberReference)) {
-    return barberReference;
+  if (typeof makeupReference === 'string' && /^[0-9a-fA-F]{24}$/.test(makeupReference)) {
+    return makeupReference;
   }
 
-  const barber = await Barber.findOne({ slug: barberReference }).select('_id');
-  return barber?._id?.toString() || null;
+  const makeupArtist = await MakeupArtist.findOne({ slug: makeupReference }).select('_id');
+  return makeupArtist?._id?.toString() || null;
 };
 
-const getBarberIdFromRequest = async (req) => {
-  if (req.user?.barberId) return req.user.barberId.toString();
+const getMakeupArtistIdFromRequest = async (req) => {
+  if (req.user?.makeupArtistId) return req.user.makeupArtistId.toString();
 
-  return resolveBarberId(
-    req.body?.barberId
-      || req.body?.barber
+  return resolveMakeupArtistId(
+    req.body?.makeupArtistId
+      || req.body?.makeupArtist
       || req.body?.slug
-      || req.query?.barberId
-      || req.query?.barber
+      || req.query?.makeupArtistId
+      || req.query?.makeupArtist
       || req.query?.slug
   );
 };
@@ -59,12 +57,12 @@ const getAdminBookingEmail = () => (
   || 'stylevaultlite@gmail.com'
 );
 
-const upsertCustomer = async ({ barberId, name, email, phone }) => {
-  let customer = await Customer.findOne({ barberId, email });
+const upsertCustomer = async ({ makeupArtistId, name, email, phone }) => {
+  let customer = await MakeupCustomer.findOne({ makeupArtistId, email });
 
   if (!customer) {
-    customer = await Customer.create({
-      barberId,
+    customer = await MakeupCustomer.create({
+      makeupArtistId,
       name,
       email,
       phone: phone || undefined,
@@ -79,9 +77,14 @@ const upsertCustomer = async ({ barberId, name, email, phone }) => {
   return customer;
 };
 
+const getServiceDuration = (service, selectedPricingOption) => {
+  const option = service?.pricingOptions?.find((item) => item.label === selectedPricingOption);
+  return option?.duration || service?.duration || 0;
+};
+
 const mapCalendarEvent = (appointment) => {
   const startAt = buildDateTime(appointment.date, appointment.time);
-  const duration = appointment.serviceId?.duration || 0;
+  const duration = getServiceDuration(appointment.serviceId, appointment.selectedPricingOption);
   const endAt = startAt ? new Date(startAt.getTime() + duration * 60 * 1000) : null;
   const serviceName = appointment.serviceId?.name || 'Appointment';
 
@@ -97,77 +100,107 @@ const mapCalendarEvent = (appointment) => {
     customerName: appointment.customerName,
     customerEmail: appointment.customerEmail,
     customerId: appointment.customerId?._id || appointment.customerId,
+    selectedPricingOption: appointment.selectedPricingOption,
+    selectedAddOns: appointment.selectedAddOns || [],
     service: appointment.serviceId
       ? {
           id: appointment.serviceId._id,
           name: appointment.serviceId.name,
-          duration: appointment.serviceId.duration,
+          duration,
           price: appointment.serviceId.price,
         }
       : null,
   };
 };
 
-// Book appointment
-export const createAppointment = async (req, res) => {
+const resolveBookingSelections = (service, payload = {}) => {
+  const selectedPricingOption = payload.selectedPricingOption || '';
+  const selectedAddOns = Array.isArray(payload.selectedAddOns) ? payload.selectedAddOns : [];
+
+  let totalPrice = Number(service.price || 0);
+
+  if (selectedPricingOption) {
+    const pricingOption = service.pricingOptions.find((item) => item.label === selectedPricingOption);
+    if (!pricingOption) {
+      const error = new Error('Selected pricing option is invalid');
+      error.statusCode = 400;
+      throw error;
+    }
+    totalPrice = Number(pricingOption.price || totalPrice);
+  }
+
+  const matchedAddOns = selectedAddOns
+    .map((name) => service.addOns.find((item) => item.name === name))
+    .filter(Boolean);
+
+  totalPrice += matchedAddOns.reduce((sum, item) => sum + Number(item.price || 0), 0);
+
+  return {
+    selectedPricingOption,
+    selectedAddOns: matchedAddOns.map((item) => item.name),
+    totalPrice,
+  };
+};
+
+export const createMakeupAppointment = async (req, res) => {
   try {
     const {
       serviceId,
       date,
       time,
-      price,
-      // allow either customerName/customerEmail or name/email
       customerName,
       customerEmail,
       name,
       email,
       phone,
-      barberId: bodyBarberId,
-      barber,
+      makeupArtistId: bodyMakeupArtistId,
+      makeupArtist,
       slug,
     } = req.body;
 
-    const barberId = await getBarberIdFromRequest({
+    const makeupArtistId = await getMakeupArtistIdFromRequest({
       ...req,
-      body: { ...req.body, barberId: bodyBarberId || barber || slug },
+      body: { ...req.body, makeupArtistId: bodyMakeupArtistId || makeupArtist || slug },
     });
 
-    if (!barberId) return res.status(400).json({ message: 'Barber is required' });
+    if (!makeupArtistId) return res.status(400).json({ message: 'Makeup artist is required' });
 
     const cName = customerName || name;
     const cEmail = customerEmail || email;
+    if (!cName || !cEmail) {
+      return res.status(400).json({ message: 'Customer name and email are required' });
+    }
 
-    if (!cName || !cEmail) return res.status(400).json({ message: 'Customer name and email are required' });
-
-    const service = await Service.findOne({ _id: serviceId, barberId });
+    const service = await MakeupService.findOne({ _id: serviceId, makeupArtistId });
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    const barberProfile = await Barber.findById(barberId).lean();
-    if (!barberProfile) return res.status(404).json({ message: 'Barber not found' });
-    const barberUser = await User.findOne({ barberId, role: 'barber' }).select('email notificationTokens').lean();
+    const artistProfile = await MakeupArtist.findById(makeupArtistId).lean();
+    if (!artistProfile) return res.status(404).json({ message: 'Makeup artist not found' });
 
-    // Check if slot is free
-    const exists = await Appointment.findOne({ barberId, date, time, status: { $ne: 'cancelled' } });
+    const artistUser = await User.findOne({ makeupArtistId, role: 'makeup-artist' }).select('email notificationTokens').lean();
+
+    const exists = await MakeupAppointment.findOne({ makeupArtistId, date, time, status: { $ne: 'cancelled' } });
     if (exists) return res.status(400).json({ message: 'Time slot already booked' });
 
-    // Upsert customer (match by email within barber)
-    const customer = await upsertCustomer({ barberId, name: cName, email: cEmail, phone });
+    const customer = await upsertCustomer({ makeupArtistId, name: cName, email: cEmail, phone });
+    const bookingSelections = resolveBookingSelections(service, req.body);
 
-    const appointment = await Appointment.create({
-      barberId,
+    const appointment = await MakeupAppointment.create({
+      makeupArtistId,
       serviceId,
       date,
       time,
       customerId: customer._id,
       customerName: cName,
       customerEmail: cEmail,
-      price: typeof price === 'number' ? price : service.price,
+      price: bookingSelections.totalPrice,
+      selectedPricingOption: bookingSelections.selectedPricingOption,
+      selectedAddOns: bookingSelections.selectedAddOns,
       status: 'confirmed',
     });
 
-    await Service.findByIdAndUpdate(serviceId, { $inc: { bookingsCount: 1 } });
+    await MakeupService.findByIdAndUpdate(serviceId, { $inc: { bookingsCount: 1 } });
 
-    // Add visit to customer history
     customer.visitHistory.push(appointment._id);
     await customer.save();
 
@@ -175,12 +208,12 @@ export const createAppointment = async (req, res) => {
     let emailError = null;
     let adminEmailResult = null;
     let adminEmailError = null;
-    let barberEmailResult = null;
-    let barberEmailError = null;
-    let barberPushResult = null;
-    let barberPushError = null;
+    let artistEmailResult = null;
+    let artistEmailError = null;
+    let artistPushResult = null;
+    let artistPushError = null;
+
     const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-    const appointmentPrice = typeof price === 'number' ? price : service.price;
 
     try {
       emailResult = await sendEmail({
@@ -188,19 +221,20 @@ export const createAppointment = async (req, res) => {
         subject: 'Your appointment is confirmed',
         html: bookingConfirmationTemplate({
           customerName: cName,
-          barberName: barberProfile.name,
+          providerName: artistProfile.name,
+          providerLabel: 'Makeup Artist',
           serviceName: service.name,
           appointmentDate: date,
           appointmentTime: time,
-          location: barberProfile.location || 'StyleVault booking',
-          price: appointmentPrice,
-          currency: barberProfile.currency || 'USD',
-          manageLink: `${appBaseUrl}/barbers/${barberProfile.slug}`,
+          location: artistProfile.location || 'StyleVault booking',
+          price: bookingSelections.totalPrice,
+          currency: artistProfile.currency || 'USD',
+          manageLink: `${appBaseUrl}/makeup-artists/${artistProfile.slug}`,
         }),
       });
     } catch (err) {
       emailError = err.message;
-      console.error('Booking confirmation email failed:', err.message);
+      console.error('Makeup booking confirmation email failed:', err.message);
     }
 
     try {
@@ -211,75 +245,77 @@ export const createAppointment = async (req, res) => {
           customerName: cName,
           customerEmail: cEmail,
           customerPhone: phone,
-          barberName: barberProfile.name,
+          providerName: artistProfile.name,
+          providerLabel: 'Makeup Artist',
           serviceName: service.name,
           appointmentDate: date,
           appointmentTime: time,
-          location: barberProfile.location || 'StyleVault booking',
-          price: appointmentPrice,
-          currency: barberProfile.currency || 'USD',
+          location: artistProfile.location || 'StyleVault booking',
+          price: bookingSelections.totalPrice,
+          currency: artistProfile.currency || 'USD',
         }),
       });
     } catch (err) {
       adminEmailError = err.message;
-      console.error('Admin booking email failed:', err.message);
+      console.error('Makeup admin booking email failed:', err.message);
     }
 
-    if (barberUser?.email) {
+    if (artistUser?.email) {
       try {
-        barberEmailResult = await sendEmail({
-          to: barberUser.email,
+        artistEmailResult = await sendEmail({
+          to: artistUser.email,
           subject: `New appointment booked with you: ${cName}`,
           html: adminAppointmentNotificationTemplate({
             customerName: cName,
             customerEmail: cEmail,
             customerPhone: phone,
-            barberName: barberProfile.name,
+            providerName: artistProfile.name,
+            providerLabel: 'Makeup Artist',
             serviceName: service.name,
             appointmentDate: date,
             appointmentTime: time,
-            location: barberProfile.location || 'StyleVault booking',
-            price: appointmentPrice,
-            currency: barberProfile.currency || 'USD',
+            location: artistProfile.location || 'StyleVault booking',
+            price: bookingSelections.totalPrice,
+            currency: artistProfile.currency || 'USD',
           }),
         });
       } catch (err) {
-        barberEmailError = err.message;
-        console.error('Barber booking email failed:', err.message);
+        artistEmailError = err.message;
+        console.error('Makeup artist booking email failed:', err.message);
       }
     } else {
-      barberEmailError = 'Barber email is not configured';
+      artistEmailError = 'Makeup artist email is not configured';
     }
 
-    if (barberUser) {
+    if (artistUser) {
       try {
-        barberPushResult = await sendUserPushNotification({
-          user: barberUser,
+        artistPushResult = await sendUserPushNotification({
+          user: artistUser,
           title: 'New appointment booked',
           body: `${cName} booked ${service.name} on ${date} at ${time}.`,
           data: {
             type: 'appointment',
             action: 'created',
             appointmentId: appointment._id.toString(),
-            providerRole: 'barber',
-            providerId: barberId,
+            providerRole: 'makeup-artist',
+            providerId: makeupArtistId,
             customerName: cName,
             serviceName: service.name,
             appointmentDate: date,
             appointmentTime: time,
-            link: '/barbers/admin/appointments',
+            link: '/makeup-artists/admin/appointments',
           },
-          link: '/barbers/admin/appointments',
+          link: '/makeup-artists/admin/appointments',
         });
       } catch (err) {
-        barberPushError = err.message;
-        console.error('Barber push notification failed:', err.message);
+        artistPushError = err.message;
+        console.error('Makeup artist push notification failed:', err.message);
       }
     } else {
-      barberPushError = 'Barber account is not configured';
+      artistPushError = 'Makeup artist account is not configured';
     }
 
-    emitBarberUpdate(barberId, {
+    emitMakeupArtistUpdate(makeupArtistId, {
       type: 'appointment',
       action: 'created',
       appointmentId: appointment._id.toString(),
@@ -295,34 +331,30 @@ export const createAppointment = async (req, res) => {
       emailError,
       adminEmailResult,
       adminEmailError,
-      barberEmailResult,
-      barberEmailError,
-      barberPushResult,
-      barberPushError,
+      artistEmailResult,
+      artistEmailError,
+      artistPushResult,
+      artistPushError,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
 
-// Get barber appointments
-export const getAppointments = async (req, res) => {
+export const getMakeupAppointments = async (req, res) => {
   try {
-    const barberId = await getBarberIdFromRequest(req);
-    if (!barberId) return res.status(400).json({ message: 'Barber is required' });
+    const makeupArtistId = await getMakeupArtistIdFromRequest(req);
+    if (!makeupArtistId) return res.status(400).json({ message: 'Makeup artist is required' });
 
-    const filter = { barberId };
+    const filter = { makeupArtistId };
 
     if (req.query.status) filter.status = req.query.status;
     if (req.query.date) filter.date = req.query.date;
     if (req.query.customerId) filter.customerId = req.query.customerId;
+    if (req.query.includeCancelled !== 'true') filter.status = { $ne: 'cancelled' };
 
-    if (req.query.includeCancelled !== 'true') {
-      filter.status = { $ne: 'cancelled' };
-    }
-
-    const appointments = await Appointment.find(filter)
-      .populate('serviceId', 'name duration price')
+    const appointments = await MakeupAppointment.find(filter)
+      .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone')
       .sort({ date: 1, time: 1 });
 
@@ -332,13 +364,12 @@ export const getAppointments = async (req, res) => {
   }
 };
 
-// Calendar appointment feed
-export const getCalendarAppointments = async (req, res) => {
+export const getMakeupCalendarAppointments = async (req, res) => {
   try {
-    const barberId = await getBarberIdFromRequest(req);
-    if (!barberId) return res.status(400).json({ message: 'Barber is required' });
+    const makeupArtistId = await getMakeupArtistIdFromRequest(req);
+    if (!makeupArtistId) return res.status(400).json({ message: 'Makeup artist is required' });
 
-    const filter = { barberId };
+    const filter = { makeupArtistId };
 
     if (req.query.start || req.query.end) {
       filter.date = {};
@@ -346,8 +377,8 @@ export const getCalendarAppointments = async (req, res) => {
       if (req.query.end) filter.date.$lte = req.query.end;
     }
 
-    const appointments = await Appointment.find(filter)
-      .populate('serviceId', 'name duration price')
+    const appointments = await MakeupAppointment.find(filter)
+      .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone')
       .sort({ date: 1, time: 1 });
 
@@ -357,18 +388,16 @@ export const getCalendarAppointments = async (req, res) => {
   }
 };
 
-// Check availability
-export const checkAvailability = async (req, res) => {
+export const checkMakeupAvailability = async (req, res) => {
   try {
-    const { date } = req.query;
-    const { time } = req.query;
-    const barberId = await getBarberIdFromRequest(req);
+    const { date, time } = req.query;
+    const makeupArtistId = await getMakeupArtistIdFromRequest(req);
 
-    if (!barberId) return res.status(400).json({ message: 'Barber is required' });
+    if (!makeupArtistId) return res.status(400).json({ message: 'Makeup artist is required' });
     if (!date) return res.status(400).json({ message: 'Date is required' });
 
-    const appointments = await Appointment.find({ barberId, date, status: { $ne: 'cancelled' } });
-    const bookedTimes = appointments.map(a => a.time);
+    const appointments = await MakeupAppointment.find({ makeupArtistId, date, status: { $ne: 'cancelled' } });
+    const bookedTimes = appointments.map((appointment) => appointment.time);
 
     res.json({
       bookedTimes,
@@ -379,21 +408,19 @@ export const checkAvailability = async (req, res) => {
   }
 };
 
-// Update appointment
-export const updateAppointment = async (req, res) => {
+export const updateMakeupAppointment = async (req, res) => {
   try {
-    const barberId = req.user?.barberId;
-    const appointment = await Appointment.findOne({ _id: req.params.id, barberId });
-
+    const makeupArtistId = req.user?.makeupArtistId;
+    const appointment = await MakeupAppointment.findOne({ _id: req.params.id, makeupArtistId });
     if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
 
     const nextDate = req.body.date || appointment.date;
     const nextTime = req.body.time || appointment.time;
 
     if (nextDate !== appointment.date || nextTime !== appointment.time) {
-      const conflictingAppointment = await Appointment.findOne({
+      const conflictingAppointment = await MakeupAppointment.findOne({
         _id: { $ne: appointment._id },
-        barberId,
+        makeupArtistId,
         date: nextDate,
         time: nextTime,
         status: { $ne: 'cancelled' },
@@ -404,19 +431,17 @@ export const updateAppointment = async (req, res) => {
       }
     }
 
-    if (req.body.serviceId) {
-      const service = await Service.findOne({ _id: req.body.serviceId, barberId });
-      if (!service) return res.status(404).json({ message: 'Service not found' });
+    const service = await MakeupService.findOne({
+      _id: req.body.serviceId || appointment.serviceId,
+      makeupArtistId,
+    });
 
-      appointment.serviceId = service._id;
-      if (typeof req.body.price !== 'number') {
-        appointment.price = service.price;
-      }
-    }
+    if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    if (typeof req.body.price === 'number') {
-      appointment.price = req.body.price;
-    }
+    const bookingSelections = resolveBookingSelections(service, {
+      selectedPricingOption: req.body.selectedPricingOption ?? appointment.selectedPricingOption,
+      selectedAddOns: req.body.selectedAddOns ?? appointment.selectedAddOns,
+    });
 
     const nextCustomerName = req.body.customerName || req.body.name || appointment.customerName;
     const nextCustomerEmail = req.body.customerEmail || req.body.email || appointment.customerEmail;
@@ -424,7 +449,7 @@ export const updateAppointment = async (req, res) => {
 
     if (nextCustomerEmail) {
       const customer = await upsertCustomer({
-        barberId,
+        makeupArtistId,
         name: nextCustomerName,
         email: nextCustomerEmail,
         phone: nextCustomerPhone,
@@ -440,17 +465,21 @@ export const updateAppointment = async (req, res) => {
       }
     }
 
+    appointment.serviceId = service._id;
+    appointment.price = bookingSelections.totalPrice;
+    appointment.selectedPricingOption = bookingSelections.selectedPricingOption;
+    appointment.selectedAddOns = bookingSelections.selectedAddOns;
     if (req.body.date) appointment.date = req.body.date;
     if (req.body.time) appointment.time = req.body.time;
     if (req.body.status) appointment.status = req.body.status;
 
     await appointment.save();
 
-    const populatedAppointment = await Appointment.findById(appointment._id)
-      .populate('serviceId', 'name duration price')
+    const populatedAppointment = await MakeupAppointment.findById(appointment._id)
+      .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone');
 
-    emitBarberUpdate(barberId, {
+    emitMakeupArtistUpdate(makeupArtistId, {
       type: 'appointment',
       action: 'updated',
       appointmentId: appointment._id.toString(),
@@ -458,15 +487,14 @@ export const updateAppointment = async (req, res) => {
 
     res.json(populatedAppointment);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
 
-// Cancel appointment
-export const cancelAppointment = async (req, res) => {
+export const cancelMakeupAppointment = async (req, res) => {
   try {
-    const barberId = req.user?.barberId;
-    const appointment = await Appointment.findOne({ _id: req.params.id, barberId })
+    const makeupArtistId = req.user?.makeupArtistId;
+    const appointment = await MakeupAppointment.findOne({ _id: req.params.id, makeupArtistId })
       .populate('serviceId', 'name');
 
     if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
@@ -491,10 +519,10 @@ export const cancelAppointment = async (req, res) => {
       });
     } catch (err) {
       emailError = err.message;
-      console.error('Cancellation email failed:', err.message);
+      console.error('Makeup cancellation email failed:', err.message);
     }
 
-    emitBarberUpdate(barberId, {
+    emitMakeupArtistUpdate(makeupArtistId, {
       type: 'appointment',
       action: 'cancelled',
       appointmentId: appointment._id.toString(),
@@ -506,45 +534,43 @@ export const cancelAppointment = async (req, res) => {
   }
 };
 
-// Resend confirmation email for an appointment (barber only)
-export const resendConfirmationEmail = async (req, res) => {
+export const resendMakeupConfirmationEmail = async (req, res) => {
   try {
-    const barberId = req.user?.barberId;
-    if (!barberId) return res.status(403).json({ message: 'Not authorized' });
+    const makeupArtistId = req.user?.makeupArtistId;
+    if (!makeupArtistId) return res.status(403).json({ message: 'Not authorized' });
 
-    const appointment = await Appointment.findOne({ _id: req.params.id, barberId })
-      .populate('serviceId', 'name duration price')
+    const appointment = await MakeupAppointment.findOne({ _id: req.params.id, makeupArtistId })
+      .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone');
 
     if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
 
-    const barberProfile = await Barber.findById(barberId).lean();
+    const makeupArtist = await MakeupArtist.findById(makeupArtistId).lean();
 
     let emailResult = null;
     let emailError = null;
 
     try {
       const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-      const appointmentPrice = appointment.price || appointment.serviceId?.price || 0;
-
       emailResult = await sendEmail({
         to: appointment.customerEmail,
         subject: 'Your appointment is confirmed',
         html: bookingConfirmationTemplate({
           customerName: appointment.customerName,
-          barberName: barberProfile?.name || 'StyleVault',
+          providerName: makeupArtist?.name || 'StyleVault',
+          providerLabel: 'Makeup Artist',
           serviceName: appointment.serviceId?.name || 'Appointment',
           appointmentDate: appointment.date,
           appointmentTime: appointment.time,
-          location: barberProfile?.location || 'StyleVault booking',
-          price: appointmentPrice,
-          currency: barberProfile?.currency || 'USD',
-          manageLink: `${appBaseUrl}/barbers/${barberProfile?.slug}`,
+          location: makeupArtist?.location || 'StyleVault booking',
+          price: appointment.price || appointment.serviceId?.price || 0,
+          currency: makeupArtist?.currency || 'USD',
+          manageLink: `${appBaseUrl}/makeup-artists/${makeupArtist?.slug}`,
         }),
       });
     } catch (err) {
       emailError = err.message;
-      console.error('Resend confirmation email failed:', err.message);
+      console.error('Makeup resend confirmation email failed:', err.message);
     }
 
     res.json({ appointment, emailResult, emailError });

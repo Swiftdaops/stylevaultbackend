@@ -16,6 +16,9 @@ const authMiddleware = async (req, res, next) => {
       role: user.role,
       barberId: user.barberId,
       hairSpecialistId: user.hairSpecialistId,
+      nailTechnicianId: user.nailTechnicianId,
+      lashTechnicianId: user.lashTechnicianId,
+      makeupArtistId: user.makeupArtistId,
     };
     next();
   } catch (error) {

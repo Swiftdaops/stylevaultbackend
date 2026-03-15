@@ -1,11 +1,11 @@
-import HairAppointment from '../models/HairAppointment.js';
-import HairCustomer from '../models/HairCustomer.js';
-import HairService from '../models/HairService.js';
-import HairSpecialist from '../models/HairSpecialist.js';
+import LashAppointment from '../models/LashAppointment.js';
+import LashCustomer from '../models/LashCustomer.js';
+import LashService from '../models/LashService.js';
+import LashTechnician from '../models/LashTechnician.js';
 import User from '../models/User.js';
 import { sendEmail } from '../services/emailService.js';
 import { sendUserPushNotification } from '../services/pushNotificationService.js';
-import { emitHairSpecialistUpdate } from '../socket/index.js';
+import { emitLashTechnicianUpdate } from '../socket/index.js';
 import { bookingConfirmationTemplate } from '../templates/bookingConfirmationEmail.js';
 import { adminAppointmentNotificationTemplate } from '../templates/adminAppointmentNotificationEmail.js';
 
@@ -23,30 +23,30 @@ const buildDateTime = (date, time) => {
   return Number.isNaN(value.getTime()) ? null : value;
 };
 
-const resolveHairSpecialistId = async (hairReference) => {
-  if (!hairReference) return null;
+const resolveLashTechnicianId = async (lashReference) => {
+  if (!lashReference) return null;
 
-  if (typeof hairReference === 'object' && hairReference !== null && hairReference.toString) {
-    return hairReference.toString();
+  if (typeof lashReference === 'object' && lashReference !== null && lashReference.toString) {
+    return lashReference.toString();
   }
 
-  if (typeof hairReference === 'string' && /^[0-9a-fA-F]{24}$/.test(hairReference)) {
-    return hairReference;
+  if (typeof lashReference === 'string' && /^[0-9a-fA-F]{24}$/.test(lashReference)) {
+    return lashReference;
   }
 
-  const hairSpecialist = await HairSpecialist.findOne({ slug: hairReference }).select('_id');
-  return hairSpecialist?._id?.toString() || null;
+  const lashTechnician = await LashTechnician.findOne({ slug: lashReference }).select('_id');
+  return lashTechnician?._id?.toString() || null;
 };
 
-const getHairSpecialistIdFromRequest = async (req) => {
-  if (req.user?.hairSpecialistId) return req.user.hairSpecialistId.toString();
+const getLashTechnicianIdFromRequest = async (req) => {
+  if (req.user?.lashTechnicianId) return req.user.lashTechnicianId.toString();
 
-  return resolveHairSpecialistId(
-    req.body?.hairSpecialistId
-      || req.body?.hairSpecialist
+  return resolveLashTechnicianId(
+    req.body?.lashTechnicianId
+      || req.body?.lashTechnician
       || req.body?.slug
-      || req.query?.hairSpecialistId
-      || req.query?.hairSpecialist
+      || req.query?.lashTechnicianId
+      || req.query?.lashTechnician
       || req.query?.slug
   );
 };
@@ -57,12 +57,12 @@ const getAdminBookingEmail = () => (
   || 'stylevaultlite@gmail.com'
 );
 
-const upsertCustomer = async ({ hairSpecialistId, name, email, phone }) => {
-  let customer = await HairCustomer.findOne({ hairSpecialistId, email });
+const upsertCustomer = async ({ lashTechnicianId, name, email, phone }) => {
+  let customer = await LashCustomer.findOne({ lashTechnicianId, email });
 
   if (!customer) {
-    customer = await HairCustomer.create({
-      hairSpecialistId,
+    customer = await LashCustomer.create({
+      lashTechnicianId,
       name,
       email,
       phone: phone || undefined,
@@ -142,7 +142,7 @@ const resolveBookingSelections = (service, payload = {}) => {
   };
 };
 
-export const createHairAppointment = async (req, res) => {
+export const createLashAppointment = async (req, res) => {
   try {
     const {
       serviceId,
@@ -153,17 +153,17 @@ export const createHairAppointment = async (req, res) => {
       name,
       email,
       phone,
-      hairSpecialistId: bodyHairSpecialistId,
-      hairSpecialist,
+      lashTechnicianId: bodyLashTechnicianId,
+      lashTechnician,
       slug,
     } = req.body;
 
-    const hairSpecialistId = await getHairSpecialistIdFromRequest({
+    const lashTechnicianId = await getLashTechnicianIdFromRequest({
       ...req,
-      body: { ...req.body, hairSpecialistId: bodyHairSpecialistId || hairSpecialist || slug },
+      body: { ...req.body, lashTechnicianId: bodyLashTechnicianId || lashTechnician || slug },
     });
 
-    if (!hairSpecialistId) return res.status(400).json({ message: 'Hair specialist is required' });
+    if (!lashTechnicianId) return res.status(400).json({ message: 'Lash technician is required' });
 
     const cName = customerName || name;
     const cEmail = customerEmail || email;
@@ -171,22 +171,22 @@ export const createHairAppointment = async (req, res) => {
       return res.status(400).json({ message: 'Customer name and email are required' });
     }
 
-    const service = await HairService.findOne({ _id: serviceId, hairSpecialistId });
+    const service = await LashService.findOne({ _id: serviceId, lashTechnicianId });
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    const specialistProfile = await HairSpecialist.findById(hairSpecialistId).lean();
-    if (!specialistProfile) return res.status(404).json({ message: 'Hair specialist not found' });
+    const technicianProfile = await LashTechnician.findById(lashTechnicianId).lean();
+    if (!technicianProfile) return res.status(404).json({ message: 'Lash technician not found' });
 
-    const specialistUser = await User.findOne({ hairSpecialistId, role: 'hair-specialist' }).select('email notificationTokens').lean();
+    const technicianUser = await User.findOne({ lashTechnicianId, role: 'lash-technician' }).select('email notificationTokens').lean();
 
-    const exists = await HairAppointment.findOne({ hairSpecialistId, date, time, status: { $ne: 'cancelled' } });
+    const exists = await LashAppointment.findOne({ lashTechnicianId, date, time, status: { $ne: 'cancelled' } });
     if (exists) return res.status(400).json({ message: 'Time slot already booked' });
 
-    const customer = await upsertCustomer({ hairSpecialistId, name: cName, email: cEmail, phone });
+    const customer = await upsertCustomer({ lashTechnicianId, name: cName, email: cEmail, phone });
     const bookingSelections = resolveBookingSelections(service, req.body);
 
-    const appointment = await HairAppointment.create({
-      hairSpecialistId,
+    const appointment = await LashAppointment.create({
+      lashTechnicianId,
       serviceId,
       date,
       time,
@@ -199,7 +199,7 @@ export const createHairAppointment = async (req, res) => {
       status: 'confirmed',
     });
 
-    await HairService.findByIdAndUpdate(serviceId, { $inc: { bookingsCount: 1 } });
+    await LashService.findByIdAndUpdate(serviceId, { $inc: { bookingsCount: 1 } });
 
     customer.visitHistory.push(appointment._id);
     await customer.save();
@@ -208,10 +208,10 @@ export const createHairAppointment = async (req, res) => {
     let emailError = null;
     let adminEmailResult = null;
     let adminEmailError = null;
-    let specialistEmailResult = null;
-    let specialistEmailError = null;
-    let specialistPushResult = null;
-    let specialistPushError = null;
+    let technicianEmailResult = null;
+    let technicianEmailError = null;
+    let technicianPushResult = null;
+    let technicianPushError = null;
 
     const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
@@ -221,20 +221,20 @@ export const createHairAppointment = async (req, res) => {
         subject: 'Your appointment is confirmed',
         html: bookingConfirmationTemplate({
           customerName: cName,
-          providerName: specialistProfile.name,
-          providerLabel: 'Hair Specialist',
+          providerName: technicianProfile.name,
+          providerLabel: 'Lash Technician',
           serviceName: service.name,
           appointmentDate: date,
           appointmentTime: time,
-          location: specialistProfile.location || 'StyleVault booking',
+          location: technicianProfile.location || 'StyleVault booking',
           price: bookingSelections.totalPrice,
-          currency: specialistProfile.currency || 'USD',
-          manageLink: `${appBaseUrl}/hair-specialists/${specialistProfile.slug}`,
+          currency: technicianProfile.currency || 'USD',
+          manageLink: `${appBaseUrl}/lash-technicians/${technicianProfile.slug}`,
         }),
       });
     } catch (err) {
       emailError = err.message;
-      console.error('Hair booking confirmation email failed:', err.message);
+      console.error('Lash booking confirmation email failed:', err.message);
     }
 
     try {
@@ -245,77 +245,77 @@ export const createHairAppointment = async (req, res) => {
           customerName: cName,
           customerEmail: cEmail,
           customerPhone: phone,
-          providerName: specialistProfile.name,
-          providerLabel: 'Hair Specialist',
+          providerName: technicianProfile.name,
+          providerLabel: 'Lash Technician',
           serviceName: service.name,
           appointmentDate: date,
           appointmentTime: time,
-          location: specialistProfile.location || 'StyleVault booking',
+          location: technicianProfile.location || 'StyleVault booking',
           price: bookingSelections.totalPrice,
-          currency: specialistProfile.currency || 'USD',
+          currency: technicianProfile.currency || 'USD',
         }),
       });
     } catch (err) {
       adminEmailError = err.message;
-      console.error('Hair admin booking email failed:', err.message);
+      console.error('Lash admin booking email failed:', err.message);
     }
 
-    if (specialistUser?.email) {
+    if (technicianUser?.email) {
       try {
-        specialistEmailResult = await sendEmail({
-          to: specialistUser.email,
+        technicianEmailResult = await sendEmail({
+          to: technicianUser.email,
           subject: `New appointment booked with you: ${cName}`,
           html: adminAppointmentNotificationTemplate({
             customerName: cName,
             customerEmail: cEmail,
             customerPhone: phone,
-            providerName: specialistProfile.name,
-            providerLabel: 'Hair Specialist',
+            providerName: technicianProfile.name,
+            providerLabel: 'Lash Technician',
             serviceName: service.name,
             appointmentDate: date,
             appointmentTime: time,
-            location: specialistProfile.location || 'StyleVault booking',
+            location: technicianProfile.location || 'StyleVault booking',
             price: bookingSelections.totalPrice,
-            currency: specialistProfile.currency || 'USD',
+            currency: technicianProfile.currency || 'USD',
           }),
         });
       } catch (err) {
-        specialistEmailError = err.message;
-        console.error('Hair specialist booking email failed:', err.message);
+        technicianEmailError = err.message;
+        console.error('Lash technician booking email failed:', err.message);
       }
     } else {
-      specialistEmailError = 'Hair specialist email is not configured';
+      technicianEmailError = 'Lash technician email is not configured';
     }
 
-    if (specialistUser) {
+    if (technicianUser) {
       try {
-        specialistPushResult = await sendUserPushNotification({
-          user: specialistUser,
+        technicianPushResult = await sendUserPushNotification({
+          user: technicianUser,
           title: 'New appointment booked',
           body: `${cName} booked ${service.name} on ${date} at ${time}.`,
           data: {
             type: 'appointment',
             action: 'created',
             appointmentId: appointment._id.toString(),
-            providerRole: 'hair-specialist',
-            providerId: hairSpecialistId,
+            providerRole: 'lash-technician',
+            providerId: lashTechnicianId,
             customerName: cName,
             serviceName: service.name,
             appointmentDate: date,
             appointmentTime: time,
-            link: '/hair-specialists/admin/appointments',
+            link: '/lash-technicians/admin/appointments',
           },
-          link: '/hair-specialists/admin/appointments',
+          link: '/lash-technicians/admin/appointments',
         });
       } catch (err) {
-        specialistPushError = err.message;
-        console.error('Hair specialist push notification failed:', err.message);
+        technicianPushError = err.message;
+        console.error('Lash technician push notification failed:', err.message);
       }
     } else {
-      specialistPushError = 'Hair specialist account is not configured';
+      technicianPushError = 'Lash technician account is not configured';
     }
 
-    emitHairSpecialistUpdate(hairSpecialistId, {
+    emitLashTechnicianUpdate(lashTechnicianId, {
       type: 'appointment',
       action: 'created',
       appointmentId: appointment._id.toString(),
@@ -331,29 +331,29 @@ export const createHairAppointment = async (req, res) => {
       emailError,
       adminEmailResult,
       adminEmailError,
-      specialistEmailResult,
-      specialistEmailError,
-      specialistPushResult,
-      specialistPushError,
+      technicianEmailResult,
+      technicianEmailError,
+      technicianPushResult,
+      technicianPushError,
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
 
-export const getHairAppointments = async (req, res) => {
+export const getLashAppointments = async (req, res) => {
   try {
-    const hairSpecialistId = await getHairSpecialistIdFromRequest(req);
-    if (!hairSpecialistId) return res.status(400).json({ message: 'Hair specialist is required' });
+    const lashTechnicianId = await getLashTechnicianIdFromRequest(req);
+    if (!lashTechnicianId) return res.status(400).json({ message: 'Lash technician is required' });
 
-    const filter = { hairSpecialistId };
+    const filter = { lashTechnicianId };
 
     if (req.query.status) filter.status = req.query.status;
     if (req.query.date) filter.date = req.query.date;
     if (req.query.customerId) filter.customerId = req.query.customerId;
     if (req.query.includeCancelled !== 'true') filter.status = { $ne: 'cancelled' };
 
-    const appointments = await HairAppointment.find(filter)
+    const appointments = await LashAppointment.find(filter)
       .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone')
       .sort({ date: 1, time: 1 });
@@ -364,12 +364,12 @@ export const getHairAppointments = async (req, res) => {
   }
 };
 
-export const getHairCalendarAppointments = async (req, res) => {
+export const getLashCalendarAppointments = async (req, res) => {
   try {
-    const hairSpecialistId = await getHairSpecialistIdFromRequest(req);
-    if (!hairSpecialistId) return res.status(400).json({ message: 'Hair specialist is required' });
+    const lashTechnicianId = await getLashTechnicianIdFromRequest(req);
+    if (!lashTechnicianId) return res.status(400).json({ message: 'Lash technician is required' });
 
-    const filter = { hairSpecialistId };
+    const filter = { lashTechnicianId };
 
     if (req.query.start || req.query.end) {
       filter.date = {};
@@ -377,7 +377,7 @@ export const getHairCalendarAppointments = async (req, res) => {
       if (req.query.end) filter.date.$lte = req.query.end;
     }
 
-    const appointments = await HairAppointment.find(filter)
+    const appointments = await LashAppointment.find(filter)
       .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone')
       .sort({ date: 1, time: 1 });
@@ -388,15 +388,15 @@ export const getHairCalendarAppointments = async (req, res) => {
   }
 };
 
-export const checkHairAvailability = async (req, res) => {
+export const checkLashAvailability = async (req, res) => {
   try {
     const { date, time } = req.query;
-    const hairSpecialistId = await getHairSpecialistIdFromRequest(req);
+    const lashTechnicianId = await getLashTechnicianIdFromRequest(req);
 
-    if (!hairSpecialistId) return res.status(400).json({ message: 'Hair specialist is required' });
+    if (!lashTechnicianId) return res.status(400).json({ message: 'Lash technician is required' });
     if (!date) return res.status(400).json({ message: 'Date is required' });
 
-    const appointments = await HairAppointment.find({ hairSpecialistId, date, status: { $ne: 'cancelled' } });
+    const appointments = await LashAppointment.find({ lashTechnicianId, date, status: { $ne: 'cancelled' } });
     const bookedTimes = appointments.map((appointment) => appointment.time);
 
     res.json({
@@ -408,19 +408,19 @@ export const checkHairAvailability = async (req, res) => {
   }
 };
 
-export const updateHairAppointment = async (req, res) => {
+export const updateLashAppointment = async (req, res) => {
   try {
-    const hairSpecialistId = req.user?.hairSpecialistId;
-    const appointment = await HairAppointment.findOne({ _id: req.params.id, hairSpecialistId });
+    const lashTechnicianId = req.user?.lashTechnicianId;
+    const appointment = await LashAppointment.findOne({ _id: req.params.id, lashTechnicianId });
     if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
 
     const nextDate = req.body.date || appointment.date;
     const nextTime = req.body.time || appointment.time;
 
     if (nextDate !== appointment.date || nextTime !== appointment.time) {
-      const conflictingAppointment = await HairAppointment.findOne({
+      const conflictingAppointment = await LashAppointment.findOne({
         _id: { $ne: appointment._id },
-        hairSpecialistId,
+        lashTechnicianId,
         date: nextDate,
         time: nextTime,
         status: { $ne: 'cancelled' },
@@ -431,9 +431,9 @@ export const updateHairAppointment = async (req, res) => {
       }
     }
 
-    const service = await HairService.findOne({
+    const service = await LashService.findOne({
       _id: req.body.serviceId || appointment.serviceId,
-      hairSpecialistId,
+      lashTechnicianId,
     });
 
     if (!service) return res.status(404).json({ message: 'Service not found' });
@@ -449,7 +449,7 @@ export const updateHairAppointment = async (req, res) => {
 
     if (nextCustomerEmail) {
       const customer = await upsertCustomer({
-        hairSpecialistId,
+        lashTechnicianId,
         name: nextCustomerName,
         email: nextCustomerEmail,
         phone: nextCustomerPhone,
@@ -475,11 +475,11 @@ export const updateHairAppointment = async (req, res) => {
 
     await appointment.save();
 
-    const populatedAppointment = await HairAppointment.findById(appointment._id)
+    const populatedAppointment = await LashAppointment.findById(appointment._id)
       .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone');
 
-    emitHairSpecialistUpdate(hairSpecialistId, {
+    emitLashTechnicianUpdate(lashTechnicianId, {
       type: 'appointment',
       action: 'updated',
       appointmentId: appointment._id.toString(),
@@ -491,10 +491,10 @@ export const updateHairAppointment = async (req, res) => {
   }
 };
 
-export const cancelHairAppointment = async (req, res) => {
+export const cancelLashAppointment = async (req, res) => {
   try {
-    const hairSpecialistId = req.user?.hairSpecialistId;
-    const appointment = await HairAppointment.findOne({ _id: req.params.id, hairSpecialistId })
+    const lashTechnicianId = req.user?.lashTechnicianId;
+    const appointment = await LashAppointment.findOne({ _id: req.params.id, lashTechnicianId })
       .populate('serviceId', 'name');
 
     if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
@@ -519,10 +519,10 @@ export const cancelHairAppointment = async (req, res) => {
       });
     } catch (err) {
       emailError = err.message;
-      console.error('Hair cancellation email failed:', err.message);
+      console.error('Lash cancellation email failed:', err.message);
     }
 
-    emitHairSpecialistUpdate(hairSpecialistId, {
+    emitLashTechnicianUpdate(lashTechnicianId, {
       type: 'appointment',
       action: 'cancelled',
       appointmentId: appointment._id.toString(),
@@ -534,18 +534,18 @@ export const cancelHairAppointment = async (req, res) => {
   }
 };
 
-export const resendHairConfirmationEmail = async (req, res) => {
+export const resendLashConfirmationEmail = async (req, res) => {
   try {
-    const hairSpecialistId = req.user?.hairSpecialistId;
-    if (!hairSpecialistId) return res.status(403).json({ message: 'Not authorized' });
+    const lashTechnicianId = req.user?.lashTechnicianId;
+    if (!lashTechnicianId) return res.status(403).json({ message: 'Not authorized' });
 
-    const appointment = await HairAppointment.findOne({ _id: req.params.id, hairSpecialistId })
+    const appointment = await LashAppointment.findOne({ _id: req.params.id, lashTechnicianId })
       .populate('serviceId', 'name duration price pricingOptions addOns')
       .populate('customerId', 'name email phone');
 
     if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
 
-    const hairSpecialist = await HairSpecialist.findById(hairSpecialistId).lean();
+    const lashTechnician = await LashTechnician.findById(lashTechnicianId).lean();
 
     let emailResult = null;
     let emailError = null;
@@ -557,20 +557,20 @@ export const resendHairConfirmationEmail = async (req, res) => {
         subject: 'Your appointment is confirmed',
         html: bookingConfirmationTemplate({
           customerName: appointment.customerName,
-          providerName: hairSpecialist?.name || 'StyleVault',
-          providerLabel: 'Hair Specialist',
+          providerName: lashTechnician?.name || 'StyleVault',
+          providerLabel: 'Lash Technician',
           serviceName: appointment.serviceId?.name || 'Appointment',
           appointmentDate: appointment.date,
           appointmentTime: appointment.time,
-          location: hairSpecialist?.location || 'StyleVault booking',
+          location: lashTechnician?.location || 'StyleVault booking',
           price: appointment.price || appointment.serviceId?.price || 0,
-          currency: hairSpecialist?.currency || 'USD',
-          manageLink: `${appBaseUrl}/hair-specialists/${hairSpecialist?.slug}`,
+          currency: lashTechnician?.currency || 'USD',
+          manageLink: `${appBaseUrl}/lash-technicians/${lashTechnician?.slug}`,
         }),
       });
     } catch (err) {
       emailError = err.message;
-      console.error('Hair resend confirmation email failed:', err.message);
+      console.error('Lash resend confirmation email failed:', err.message);
     }
 
     res.json({ appointment, emailResult, emailError });

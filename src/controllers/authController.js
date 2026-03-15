@@ -6,8 +6,8 @@ import bcrypt from 'bcryptjs';
 import { getAuthCookieOptions } from '../utils/authCookies.js';
 import { mergeWhatsappSocialLink, normalizeCountryCode, resolveCurrencyInput } from '../utils/profileOptions.js';
 
-const generateToken = (barber) => {
-  return jwt.sign({ id: barber._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+const generateToken = (user) => {
+  return jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
 // Register new barber
@@ -42,7 +42,7 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email, role: 'barber' });
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -69,6 +69,10 @@ export const getMe = async (req, res) => {
   const userId = req.user.id; // set by auth middleware
   try {
     const user = await User.findById(userId);
+    if (!user || user.role !== 'barber') {
+      return res.status(404).json({ message: 'Barber not found' });
+    }
+
     const barber = await Barber.findById(user.barberId);
     res.json({ user: { email: user.email, role: user.role }, barber });
   } catch (error) {

@@ -1,0 +1,23 @@
+import express from 'express';
+import authMiddleware from '../middleware/auth.js';
+import {
+  cancelMakeupAppointment,
+  checkMakeupAvailability,
+  createMakeupAppointment,
+  getMakeupAppointments,
+  getMakeupCalendarAppointments,
+  resendMakeupConfirmationEmail,
+  updateMakeupAppointment,
+} from '../controllers/makeupAppointmentController.js';
+
+const router = express.Router();
+
+router.post('/', createMakeupAppointment);
+router.get('/', authMiddleware, getMakeupAppointments);
+router.get('/calendar', getMakeupCalendarAppointments);
+router.get('/availability', checkMakeupAvailability);
+router.patch('/:id', authMiddleware, updateMakeupAppointment);
+router.patch('/:id/cancel', authMiddleware, cancelMakeupAppointment);
+router.post('/:id/resend-email', authMiddleware, resendMakeupConfirmationEmail);
+
+export default router;
