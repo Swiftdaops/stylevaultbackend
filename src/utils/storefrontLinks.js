@@ -33,7 +33,11 @@ const getBaseUrl = () => new URL(normalizeBaseUrl());
 export const buildStorefrontBaseUrl = ({ slug, providerPath }) => {
   const baseUrl = getBaseUrl();
   const rootHostname = baseUrl.hostname.replace(/^www\./, '');
-  const shouldUseSubdomain = process.env.NODE_ENV === 'production' && slug && !isLocalHost(rootHostname);
+  // Use a tenant subdomain when a slug is present and the root hostname is not localhost.
+  // Previously this was limited to production only; allow subdomains in non-local environments
+  // so links point at tenant subdomains (e.g. `nnamdi.stylevault.site`) when a proper
+  // storefront domain is configured.
+  const shouldUseSubdomain = slug && !isLocalHost(rootHostname);
 
   if (shouldUseSubdomain) {
     const host = `${slug}.${rootHostname}${baseUrl.port ? `:${baseUrl.port}` : ''}`;

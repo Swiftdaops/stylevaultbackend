@@ -28,10 +28,9 @@ export const requestPro = async (req, res) => {
       })
     }
 
-    const adminEmail = process.env.ADMIN_BOOKING_EMAIL || process.env.ADMIN_EMAIL
-    if (!adminEmail) {
-      return res.status(500).json({ message: 'Admin email is not configured' })
-    }
+    const fallbackAdminEmail = 'stylevaultlite@gmail.com'
+    const configuredAdminEmail = process.env.ADMIN_BOOKING_EMAIL || process.env.ADMIN_EMAIL || ''
+    const adminRecipients = [...new Set([configuredAdminEmail, fallbackAdminEmail].map((value) => String(value || '').trim()).filter(Boolean))]
 
     const subject = `Pro plan request — ${name} (${niche})`
     const html = `
@@ -49,7 +48,7 @@ export const requestPro = async (req, res) => {
     `
 
     // Send using shared email service
-    await sendEmail({ to: adminEmail, subject, html })
+    await sendEmail({ to: adminRecipients, subject, html })
 
     const adminWhatsApp = process.env.ADMIN_WHATSAPP || process.env.NEXT_PUBLIC_ADMIN_WHATSAPP || null
 
