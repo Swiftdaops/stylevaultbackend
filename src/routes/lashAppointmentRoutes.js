@@ -9,13 +9,14 @@ import {
   resendLashConfirmationEmail,
   updateLashAppointment,
 } from '../controllers/lashAppointmentController.js';
-import { getPublicLashBooking, updatePublicLashBooking } from '../controllers/publicBookingController.js';
+import { createPublicLashReview, getPublicLashBooking, updatePublicLashBooking } from '../controllers/publicBookingController.js';
 
 const router = express.Router();
 
 router.post('/', createLashAppointment);
 router.get('/', authMiddleware, getLashAppointments);
 router.get('/public/:id', getPublicLashBooking);
+router.post('/public/:id/review', createPublicLashReview);
 router.get('/calendar', getLashCalendarAppointments);
 router.get('/availability', checkLashAvailability);
 router.patch('/public/:id', updatePublicLashBooking);

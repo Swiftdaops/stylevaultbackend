@@ -40,6 +40,7 @@ import nailAuthRoutes from './routes/nailAuthRoutes.js';
 import lashAuthRoutes from './routes/lashAuthRoutes.js';
 import makeupAuthRoutes from './routes/makeupAuthRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import reviewRoutes from './routes/reviewRoutes.js';
 
 const app = express();
 
@@ -176,6 +177,7 @@ app.use('/api/makeup-service-catalog', makeupServiceCatalogRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/pro-request', proRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));

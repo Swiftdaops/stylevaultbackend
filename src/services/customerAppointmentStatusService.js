@@ -1,6 +1,7 @@
 import { sendCustomerBookingConfirmationEmail } from './bookingNotificationService.js';
 import { sendEmail } from './emailService.js';
 import { sendPushNotificationToEntries } from './pushNotificationService.js';
+import { completedAppointmentReviewTemplate } from '../templates/completedAppointmentReviewEmail.js';
 
 const escapeHtml = (value = '') => String(value)
   .replace(/&/g, '&amp;')
@@ -27,7 +28,7 @@ const STATUS_COPY = {
   completed: {
     pushTitle: 'Thank you for coming',
     pushBody: ({ providerName }) => `Thank you for visiting ${providerName}. We hope you enjoyed your appointment.`,
-    emailSubject: 'Thank you for coming',
+    emailSubject: ({ providerName }) => `Thanks for visiting ${providerName}`,
     emailHeading: 'Thank you for visiting',
     emailMessage: ({ providerName }) => `Thank you for visiting ${providerName}. We hope you enjoyed your appointment and would love to see you again soon.`,
   },
@@ -39,6 +40,10 @@ const STATUS_COPY = {
     emailMessage: ({ providerName }) => `Your booking with ${providerName} has been cancelled.`,
   },
 };
+
+function resolveCopyValue(value, params = {}) {
+  return typeof value === 'function' ? value(params) : value;
+}
 
 function normalizeStatus(status = 'pending') {
   const normalized = String(status || 'pending').trim().toLowerCase();
@@ -92,6 +97,7 @@ export async function sendCustomerAppointmentStatusNotifications({
   price,
   currency,
   manageLink,
+  reviewLink,
   pushEntries,
   pushData = {},
   pruneInvalidTokens,
@@ -120,10 +126,25 @@ export async function sendCustomerAppointmentStatusNotifications({
         currency,
         manageLink,
       });
+    } else if (normalizedStatus === 'completed') {
+      emailResult = await sendEmail({
+        to,
+        subject: resolveCopyValue(copy.emailSubject, { providerName: providerName || 'StyleVault' }),
+        html: completedAppointmentReviewTemplate({
+          customerName,
+          providerName,
+          providerLabel,
+          serviceName,
+          appointmentDate,
+          appointmentTime,
+          reviewLink,
+          manageLink,
+        }),
+      });
     } else {
       emailResult = await sendEmail({
         to,
-        subject: copy.emailSubject,
+        subject: resolveCopyValue(copy.emailSubject, { providerName: providerName || 'StyleVault' }),
         html: renderStatusEmailTemplate({
           status: normalizedStatus,
           customerName,

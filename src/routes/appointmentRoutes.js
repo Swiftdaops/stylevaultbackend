@@ -9,7 +9,7 @@ import {
 	cancelAppointment,
 	resendConfirmationEmail,
 } from '../controllers/appointmentController.js';
-import { getPublicBarberBooking, updatePublicBarberBooking } from '../controllers/publicBookingController.js';
+import { createPublicBarberReview, getPublicBarberBooking, updatePublicBarberBooking } from '../controllers/publicBookingController.js';
 import authMiddleware from '../middleware/auth.js';
 
 const router = express.Router();
@@ -17,6 +17,7 @@ const router = express.Router();
 router.post('/', createAppointment);
 router.get('/', authMiddleware, getAppointments);
 router.get('/public/:id', getPublicBarberBooking);
+router.post('/public/:id/review', createPublicBarberReview);
 router.get('/calendar', getCalendarAppointments);
 router.get('/availability', checkAvailability);
 router.patch('/public/:id', updatePublicBarberBooking);

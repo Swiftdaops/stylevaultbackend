@@ -6,14 +6,13 @@ import User from '../models/User.js';
 import {
   sendAdminBookingNotificationEmail,
   sendCustomerBookingConfirmationEmail,
-  sendStorefrontOwnerBookingNotificationEmail,
 } from '../services/bookingNotificationService.js';
-import { sendUserPushNotification } from '../services/pushNotificationService.js';
 import { sendCustomerAppointmentStatusNotifications } from '../services/customerAppointmentStatusService.js';
+import { sendStorefrontOwnerBookingNotifications, sendStorefrontOwnerCancellationNotification } from '../services/storefrontOwnerNotificationService.js';
 import { emitNailTechnicianUpdate } from '../socket/index.js';
 import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
 import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
-import { buildDashboardUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
+import { buildDashboardUrl, buildStorefrontCustomerBookingsUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -266,57 +265,34 @@ export const createNailAppointment = async (req, res) => {
       console.error('Nail admin booking email failed:', err.message);
     }
 
-    if (technicianUser?.email) {
-      try {
-        technicianEmailResult = await sendStorefrontOwnerBookingNotificationEmail({
-          to: technicianUser.email,
-          customerName: cName,
-          customerEmail: cEmail,
-          customerPhone: phone,
-          providerName: technicianProfile.name,
-          providerLabel: 'Nail Technician',
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: technicianProfile.location || 'StyleVault booking',
-          price: bookingSelections.totalPrice,
-          currency: technicianProfile.currency || 'USD',
-          dashboardLink: buildDashboardUrl('/nail-technicians/admin/appointments'),
-        });
-      } catch (err) {
-        technicianEmailError = err.message;
-        console.error('Nail technician booking email failed:', err.message);
-      }
-    } else {
-      technicianEmailError = 'Nail technician email is not configured';
-    }
+    try {
+      const ownerNotification = await sendStorefrontOwnerBookingNotifications({
+        ownerUser: technicianUser,
+        providerType: 'nail-technician',
+        customerName: cName,
+        customerEmail: cEmail,
+        customerPhone: phone,
+        providerName: technicianProfile.name,
+        providerLabel: 'Nail Technician',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: technicianProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: technicianProfile.currency || 'USD',
+        dashboardLink: buildDashboardUrl('/nail-technicians/admin/appointments'),
+        appointmentId: appointment._id.toString(),
+        providerId: nailTechnicianId,
+      });
 
-    if (technicianUser) {
-      try {
-        technicianPushResult = await sendUserPushNotification({
-          user: technicianUser,
-          title: 'New appointment booked',
-          body: `${cName} booked ${service.name} on ${date} at ${time}.`,
-          data: {
-            type: 'appointment',
-            action: 'created',
-            appointmentId: appointment._id.toString(),
-            providerRole: 'nail-technician',
-            providerId: nailTechnicianId,
-            customerName: cName,
-            serviceName: service.name,
-            appointmentDate: date,
-            appointmentTime: time,
-            link: '/nail-technicians/admin/appointments',
-          },
-          link: '/nail-technicians/admin/appointments',
-        });
-      } catch (err) {
-        technicianPushError = err.message;
-        console.error('Nail technician push notification failed:', err.message);
-      }
-    } else {
-      technicianPushError = 'Nail technician account is not configured';
+      technicianEmailResult = ownerNotification.emailResult;
+      technicianEmailError = ownerNotification.emailError;
+      technicianPushResult = ownerNotification.pushResult;
+      technicianPushError = ownerNotification.pushError;
+    } catch (err) {
+      technicianEmailError = err.message;
+      technicianPushError = err.message;
+      console.error('Nail technician owner booking notifications failed:', err.message);
     }
 
     try {
@@ -538,6 +514,13 @@ export const updateNailAppointment = async (req, res) => {
           appointmentId: appointment._id.toString(),
           accessToken,
         });
+        const reviewLink = buildStorefrontCustomerBookingsUrl({
+          slug: nailTechnician?.slug,
+          providerPath: 'nail-technicians',
+          providerType: 'nail-technician',
+          appointmentId: appointment._id.toString(),
+          accessToken,
+        });
 
         const customer = await NailCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
         await sendCustomerAppointmentStatusNotifications({
@@ -553,6 +536,7 @@ export const updateNailAppointment = async (req, res) => {
           price: appointment.price || service?.price || 0,
           currency: nailTechnician?.currency || 'USD',
           manageLink,
+          reviewLink,
           pushEntries: customer?.notificationSubscriptions || [],
           pushData: {
             appointmentId: appointment._id.toString(),
@@ -605,11 +589,14 @@ export const cancelNailAppointment = async (req, res) => {
 
     let emailResult = null;
     let emailError = null;
+    let ownerEmailResult = null;
+    let ownerEmailError = null;
     let customerPushResult = null;
     let customerPushError = null;
 
     try {
       const nailTechnician = await NailTechnician.findById(nailTechnicianId).lean();
+      const technicianUser = await User.findOne({ nailTechnicianId, role: 'nail-technician' }).select('email notificationTokens').lean();
       const customer = await NailCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
       const accessToken = await ensureBookingManagementToken(appointment);
       const manageLink = buildStorefrontManageBookingUrl({
@@ -656,6 +643,26 @@ export const cancelNailAppointment = async (req, res) => {
       emailError = notificationResult.emailError;
       customerPushResult = notificationResult.pushResult;
       customerPushError = notificationResult.pushError;
+
+      const ownerNotification = await sendStorefrontOwnerCancellationNotification({
+        ownerUser: technicianUser,
+        providerType: 'nail-technician',
+        customerName: appointment.customerName,
+        customerEmail: appointment.customerEmail,
+        providerName: nailTechnician?.name || 'StyleVault',
+        providerLabel: 'Nail Technician',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: nailTechnician?.location || 'StyleVault booking',
+        price: appointment.price || 0,
+        currency: nailTechnician?.currency || 'USD',
+        cancelledBy: 'Store owner',
+        dashboardLink: buildDashboardUrl('/nail-technicians/admin/appointments'),
+      });
+
+      ownerEmailResult = ownerNotification.emailResult;
+      ownerEmailError = ownerNotification.emailError;
     } catch (err) {
       emailError = err.message;
       customerPushError = err.message;
@@ -668,7 +675,7 @@ export const cancelNailAppointment = async (req, res) => {
       appointmentId: appointment._id.toString(),
     });
 
-    res.json({ appointment, emailResult, emailError, customerPushResult, customerPushError });
+    res.json({ appointment, emailResult, emailError, ownerEmailResult, ownerEmailError, customerPushResult, customerPushError });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

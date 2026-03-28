@@ -9,13 +9,14 @@ import {
   resendMakeupConfirmationEmail,
   updateMakeupAppointment,
 } from '../controllers/makeupAppointmentController.js';
-import { getPublicMakeupBooking, updatePublicMakeupBooking } from '../controllers/publicBookingController.js';
+import { createPublicMakeupReview, getPublicMakeupBooking, updatePublicMakeupBooking } from '../controllers/publicBookingController.js';
 
 const router = express.Router();
 
 router.post('/', createMakeupAppointment);
 router.get('/', authMiddleware, getMakeupAppointments);
 router.get('/public/:id', getPublicMakeupBooking);
+router.post('/public/:id/review', createPublicMakeupReview);
 router.get('/calendar', getMakeupCalendarAppointments);
 router.get('/availability', checkMakeupAvailability);
 router.patch('/public/:id', updatePublicMakeupBooking);

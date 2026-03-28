@@ -6,14 +6,13 @@ import User from '../models/User.js';
 import {
   sendAdminBookingNotificationEmail,
   sendCustomerBookingConfirmationEmail,
-  sendStorefrontOwnerBookingNotificationEmail,
 } from '../services/bookingNotificationService.js';
-import { sendUserPushNotification } from '../services/pushNotificationService.js';
 import { sendCustomerAppointmentStatusNotifications } from '../services/customerAppointmentStatusService.js';
+import { sendStorefrontOwnerBookingNotifications, sendStorefrontOwnerCancellationNotification } from '../services/storefrontOwnerNotificationService.js';
 import { emitLashTechnicianUpdate } from '../socket/index.js';
 import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
 import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
-import { buildDashboardUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
+import { buildDashboardUrl, buildStorefrontCustomerBookingsUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -266,57 +265,34 @@ export const createLashAppointment = async (req, res) => {
       console.error('Lash admin booking email failed:', err.message);
     }
 
-    if (technicianUser?.email) {
-      try {
-        technicianEmailResult = await sendStorefrontOwnerBookingNotificationEmail({
-          to: technicianUser.email,
-          customerName: cName,
-          customerEmail: cEmail,
-          customerPhone: phone,
-          providerName: technicianProfile.name,
-          providerLabel: 'Lash Technician',
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: technicianProfile.location || 'StyleVault booking',
-          price: bookingSelections.totalPrice,
-          currency: technicianProfile.currency || 'USD',
-          dashboardLink: buildDashboardUrl('/lash-technicians/admin/appointments'),
-        });
-      } catch (err) {
-        technicianEmailError = err.message;
-        console.error('Lash technician booking email failed:', err.message);
-      }
-    } else {
-      technicianEmailError = 'Lash technician email is not configured';
-    }
+    try {
+      const ownerNotification = await sendStorefrontOwnerBookingNotifications({
+        ownerUser: technicianUser,
+        providerType: 'lash-technician',
+        customerName: cName,
+        customerEmail: cEmail,
+        customerPhone: phone,
+        providerName: technicianProfile.name,
+        providerLabel: 'Lash Technician',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: technicianProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: technicianProfile.currency || 'USD',
+        dashboardLink: buildDashboardUrl('/lash-technicians/admin/appointments'),
+        appointmentId: appointment._id.toString(),
+        providerId: lashTechnicianId,
+      });
 
-    if (technicianUser) {
-      try {
-        technicianPushResult = await sendUserPushNotification({
-          user: technicianUser,
-          title: 'New appointment booked',
-          body: `${cName} booked ${service.name} on ${date} at ${time}.`,
-          data: {
-            type: 'appointment',
-            action: 'created',
-            appointmentId: appointment._id.toString(),
-            providerRole: 'lash-technician',
-            providerId: lashTechnicianId,
-            customerName: cName,
-            serviceName: service.name,
-            appointmentDate: date,
-            appointmentTime: time,
-            link: '/lash-technicians/admin/appointments',
-          },
-          link: '/lash-technicians/admin/appointments',
-        });
-      } catch (err) {
-        technicianPushError = err.message;
-        console.error('Lash technician push notification failed:', err.message);
-      }
-    } else {
-      technicianPushError = 'Lash technician account is not configured';
+      technicianEmailResult = ownerNotification.emailResult;
+      technicianEmailError = ownerNotification.emailError;
+      technicianPushResult = ownerNotification.pushResult;
+      technicianPushError = ownerNotification.pushError;
+    } catch (err) {
+      technicianEmailError = err.message;
+      technicianPushError = err.message;
+      console.error('Lash technician owner booking notifications failed:', err.message);
     }
 
     try {
@@ -538,6 +514,13 @@ export const updateLashAppointment = async (req, res) => {
           appointmentId: appointment._id.toString(),
           accessToken,
         });
+        const reviewLink = buildStorefrontCustomerBookingsUrl({
+          slug: lashTechnician?.slug,
+          providerPath: 'lash-technicians',
+          providerType: 'lash-technician',
+          appointmentId: appointment._id.toString(),
+          accessToken,
+        });
         const customer = await LashCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
 
         await sendCustomerAppointmentStatusNotifications({
@@ -553,6 +536,7 @@ export const updateLashAppointment = async (req, res) => {
           price: appointment.price || service?.price || 0,
           currency: lashTechnician?.currency || 'USD',
           manageLink,
+          reviewLink,
           pushEntries: customer?.notificationSubscriptions || [],
           pushData: {
             appointmentId: appointment._id.toString(),
@@ -605,11 +589,14 @@ export const cancelLashAppointment = async (req, res) => {
 
     let emailResult = null;
     let emailError = null;
+    let ownerEmailResult = null;
+    let ownerEmailError = null;
     let customerPushResult = null;
     let customerPushError = null;
 
     try {
       const lashTechnician = await LashTechnician.findById(lashTechnicianId).lean();
+      const technicianUser = await User.findOne({ lashTechnicianId, role: 'lash-technician' }).select('email notificationTokens').lean();
       const customer = await LashCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
       const accessToken = await ensureBookingManagementToken(appointment);
       const manageLink = buildStorefrontManageBookingUrl({
@@ -656,6 +643,26 @@ export const cancelLashAppointment = async (req, res) => {
       emailError = notificationResult.emailError;
       customerPushResult = notificationResult.pushResult;
       customerPushError = notificationResult.pushError;
+
+      const ownerNotification = await sendStorefrontOwnerCancellationNotification({
+        ownerUser: technicianUser,
+        providerType: 'lash-technician',
+        customerName: appointment.customerName,
+        customerEmail: appointment.customerEmail,
+        providerName: lashTechnician?.name || 'StyleVault',
+        providerLabel: 'Lash Technician',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: lashTechnician?.location || 'StyleVault booking',
+        price: appointment.price || 0,
+        currency: lashTechnician?.currency || 'USD',
+        cancelledBy: 'Store owner',
+        dashboardLink: buildDashboardUrl('/lash-technicians/admin/appointments'),
+      });
+
+      ownerEmailResult = ownerNotification.emailResult;
+      ownerEmailError = ownerNotification.emailError;
     } catch (err) {
       emailError = err.message;
       customerPushError = err.message;
@@ -668,7 +675,7 @@ export const cancelLashAppointment = async (req, res) => {
       appointmentId: appointment._id.toString(),
     });
 
-    res.json({ appointment, emailResult, emailError, customerPushResult, customerPushError });
+    res.json({ appointment, emailResult, emailError, ownerEmailResult, ownerEmailError, customerPushResult, customerPushError });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

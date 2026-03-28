@@ -58,6 +58,19 @@ export const buildStorefrontManageBookingUrl = ({ slug, providerPath, providerTy
   return url.toString();
 };
 
+export const buildStorefrontCustomerBookingsUrl = ({ slug, providerPath, providerType, appointmentId, accessToken, review = true }) => {
+  const storefrontBaseUrl = buildStorefrontBaseUrl({ slug, providerPath });
+  const url = new URL('my-bookings', storefrontBaseUrl);
+
+  if (providerType) url.searchParams.set('provider', providerType);
+  if (appointmentId) url.searchParams.set('bookingId', appointmentId);
+  if (accessToken) url.searchParams.set('access', accessToken);
+  if (slug) url.searchParams.set('slug', slug);
+  if (review) url.searchParams.set('review', '1');
+
+  return url.toString();
+};
+
 export const buildDashboardUrl = (path = '/') => {
   const baseUrl = getBaseUrl();
   return new URL(path.startsWith('/') ? path : `/${path}`, `${baseUrl.origin}/`).toString();

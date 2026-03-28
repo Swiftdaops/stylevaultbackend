@@ -7,14 +7,13 @@ import User from '../models/User.js';
 import {
   sendAdminBookingNotificationEmail,
   sendCustomerBookingConfirmationEmail,
-  sendStorefrontOwnerBookingNotificationEmail,
 } from '../services/bookingNotificationService.js';
-import { sendUserPushNotification } from '../services/pushNotificationService.js';
 import { sendCustomerAppointmentStatusNotifications } from '../services/customerAppointmentStatusService.js';
+import { sendStorefrontOwnerBookingNotifications, sendStorefrontOwnerCancellationNotification } from '../services/storefrontOwnerNotificationService.js';
 import { emitBarberUpdate } from '../socket/index.js';
 import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
 import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
-import { buildDashboardUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
+import { buildDashboardUrl, buildStorefrontCustomerBookingsUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -232,57 +231,34 @@ export const createAppointment = async (req, res) => {
       console.error('Admin booking email failed:', err.message);
     }
 
-    if (barberUser?.email) {
-      try {
-        barberEmailResult = await sendStorefrontOwnerBookingNotificationEmail({
-          to: barberUser.email,
-          customerName: cName,
-          customerEmail: cEmail,
-          customerPhone: phone,
-          providerName: barberProfile.name,
-          providerLabel: 'Barber',
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: barberProfile.location || 'StyleVault booking',
-          price: appointmentPrice,
-          currency: barberProfile.currency || 'USD',
-          dashboardLink: buildDashboardUrl('/barbers/admin/appointments'),
-        });
-      } catch (err) {
-        barberEmailError = err.message;
-        console.error('Barber booking email failed:', err.message);
-      }
-    } else {
-      barberEmailError = 'Barber email is not configured';
-    }
+    try {
+      const ownerNotification = await sendStorefrontOwnerBookingNotifications({
+        ownerUser: barberUser,
+        providerType: 'barber',
+        customerName: cName,
+        customerEmail: cEmail,
+        customerPhone: phone,
+        providerName: barberProfile.name,
+        providerLabel: 'Barber',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: barberProfile.location || 'StyleVault booking',
+        price: appointmentPrice,
+        currency: barberProfile.currency || 'USD',
+        dashboardLink: buildDashboardUrl('/barbers/admin/appointments'),
+        appointmentId: appointment._id.toString(),
+        providerId: barberId,
+      });
 
-    if (barberUser) {
-      try {
-        barberPushResult = await sendUserPushNotification({
-          user: barberUser,
-          title: 'New appointment booked',
-          body: `${cName} booked ${service.name} on ${date} at ${time}.`,
-          data: {
-            type: 'appointment',
-            action: 'created',
-            appointmentId: appointment._id.toString(),
-            providerRole: 'barber',
-            providerId: barberId,
-            customerName: cName,
-            serviceName: service.name,
-            appointmentDate: date,
-            appointmentTime: time,
-            link: '/barbers/admin/appointments',
-          },
-          link: '/barbers/admin/appointments',
-        });
-      } catch (err) {
-        barberPushError = err.message;
-        console.error('Barber push notification failed:', err.message);
-      }
-    } else {
-      barberPushError = 'Barber account is not configured';
+      barberEmailResult = ownerNotification.emailResult;
+      barberEmailError = ownerNotification.emailError;
+      barberPushResult = ownerNotification.pushResult;
+      barberPushError = ownerNotification.pushError;
+    } catch (err) {
+      barberEmailError = err.message;
+      barberPushError = err.message;
+      console.error('Barber owner booking notifications failed:', err.message);
     }
 
     try {
@@ -514,6 +490,13 @@ export const updateAppointment = async (req, res) => {
           appointmentId: appointment._id.toString(),
           accessToken,
         });
+        const reviewLink = buildStorefrontCustomerBookingsUrl({
+          slug: barberProfile?.slug,
+          providerPath: 'barbers',
+          providerType: 'barber',
+          appointmentId: appointment._id.toString(),
+          accessToken,
+        });
 
         const customer = await Customer.findById(appointment.customerId).select('notificationSubscriptions').lean();
         await sendCustomerAppointmentStatusNotifications({
@@ -529,6 +512,7 @@ export const updateAppointment = async (req, res) => {
           price: appointmentPrice,
           currency: barberProfile?.currency || 'USD',
           manageLink,
+          reviewLink,
           pushEntries: customer?.notificationSubscriptions || [],
           pushData: {
             appointmentId: appointment._id.toString(),
@@ -582,11 +566,14 @@ export const cancelAppointment = async (req, res) => {
 
     let emailResult = null;
     let emailError = null;
+    let ownerEmailResult = null;
+    let ownerEmailError = null;
     let customerPushResult = null;
     let customerPushError = null;
 
     try {
       const barberProfile = await Barber.findById(barberId).lean();
+      const barberUser = await User.findOne({ barberId, role: 'barber' }).select('email notificationTokens').lean();
       const customer = await Customer.findById(appointment.customerId).select('notificationSubscriptions').lean();
       const accessToken = await ensureBookingManagementToken(appointment);
       const manageLink = buildStorefrontManageBookingUrl({
@@ -633,6 +620,26 @@ export const cancelAppointment = async (req, res) => {
       emailError = notificationResult.emailError;
       customerPushResult = notificationResult.pushResult;
       customerPushError = notificationResult.pushError;
+
+      const ownerNotification = await sendStorefrontOwnerCancellationNotification({
+        ownerUser: barberUser,
+        providerType: 'barber',
+        customerName: appointment.customerName,
+        customerEmail: appointment.customerEmail,
+        providerName: barberProfile?.name || 'StyleVault',
+        providerLabel: 'Barber',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: barberProfile?.location || 'StyleVault booking',
+        price: appointment.price || 0,
+        currency: barberProfile?.currency || 'USD',
+        cancelledBy: 'Store owner',
+        dashboardLink: buildDashboardUrl('/barbers/admin/appointments'),
+      });
+
+      ownerEmailResult = ownerNotification.emailResult;
+      ownerEmailError = ownerNotification.emailError;
     } catch (err) {
       emailError = err.message;
       customerPushError = err.message;
@@ -645,7 +652,7 @@ export const cancelAppointment = async (req, res) => {
       appointmentId: appointment._id.toString(),
     });
 
-    res.json({ appointment, emailResult, emailError, customerPushResult, customerPushError });
+    res.json({ appointment, emailResult, emailError, ownerEmailResult, ownerEmailError, customerPushResult, customerPushError });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

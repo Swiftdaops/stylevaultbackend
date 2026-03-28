@@ -6,14 +6,13 @@ import User from '../models/User.js';
 import {
   sendAdminBookingNotificationEmail,
   sendCustomerBookingConfirmationEmail,
-  sendStorefrontOwnerBookingNotificationEmail,
 } from '../services/bookingNotificationService.js';
-import { sendUserPushNotification } from '../services/pushNotificationService.js';
 import { sendCustomerAppointmentStatusNotifications } from '../services/customerAppointmentStatusService.js';
+import { sendStorefrontOwnerBookingNotifications, sendStorefrontOwnerCancellationNotification } from '../services/storefrontOwnerNotificationService.js';
 import { emitMakeupArtistUpdate } from '../socket/index.js';
 import { ensureBookingManagementToken, generateBookingManagementToken } from '../utils/bookingAccess.js';
 import { upsertNotificationDeviceEntries } from '../utils/notificationDevices.js';
-import { buildDashboardUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
+import { buildDashboardUrl, buildStorefrontCustomerBookingsUrl, buildStorefrontManageBookingUrl } from '../utils/storefrontLinks.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -266,57 +265,34 @@ export const createMakeupAppointment = async (req, res) => {
       console.error('Makeup admin booking email failed:', err.message);
     }
 
-    if (artistUser?.email) {
-      try {
-        artistEmailResult = await sendStorefrontOwnerBookingNotificationEmail({
-          to: artistUser.email,
-          customerName: cName,
-          customerEmail: cEmail,
-          customerPhone: phone,
-          providerName: artistProfile.name,
-          providerLabel: 'Makeup Artist',
-          serviceName: service.name,
-          appointmentDate: date,
-          appointmentTime: time,
-          location: artistProfile.location || 'StyleVault booking',
-          price: bookingSelections.totalPrice,
-          currency: artistProfile.currency || 'USD',
-          dashboardLink: buildDashboardUrl('/makeup-artists/admin/appointments'),
-        });
-      } catch (err) {
-        artistEmailError = err.message;
-        console.error('Makeup artist booking email failed:', err.message);
-      }
-    } else {
-      artistEmailError = 'Makeup artist email is not configured';
-    }
+    try {
+      const ownerNotification = await sendStorefrontOwnerBookingNotifications({
+        ownerUser: artistUser,
+        providerType: 'makeup-artist',
+        customerName: cName,
+        customerEmail: cEmail,
+        customerPhone: phone,
+        providerName: artistProfile.name,
+        providerLabel: 'Makeup Artist',
+        serviceName: service.name,
+        appointmentDate: date,
+        appointmentTime: time,
+        location: artistProfile.location || 'StyleVault booking',
+        price: bookingSelections.totalPrice,
+        currency: artistProfile.currency || 'USD',
+        dashboardLink: buildDashboardUrl('/makeup-artists/admin/appointments'),
+        appointmentId: appointment._id.toString(),
+        providerId: makeupArtistId,
+      });
 
-    if (artistUser) {
-      try {
-        artistPushResult = await sendUserPushNotification({
-          user: artistUser,
-          title: 'New appointment booked',
-          body: `${cName} booked ${service.name} on ${date} at ${time}.`,
-          data: {
-            type: 'appointment',
-            action: 'created',
-            appointmentId: appointment._id.toString(),
-            providerRole: 'makeup-artist',
-            providerId: makeupArtistId,
-            customerName: cName,
-            serviceName: service.name,
-            appointmentDate: date,
-            appointmentTime: time,
-            link: '/makeup-artists/admin/appointments',
-          },
-          link: '/makeup-artists/admin/appointments',
-        });
-      } catch (err) {
-        artistPushError = err.message;
-        console.error('Makeup artist push notification failed:', err.message);
-      }
-    } else {
-      artistPushError = 'Makeup artist account is not configured';
+      artistEmailResult = ownerNotification.emailResult;
+      artistEmailError = ownerNotification.emailError;
+      artistPushResult = ownerNotification.pushResult;
+      artistPushError = ownerNotification.pushError;
+    } catch (err) {
+      artistEmailError = err.message;
+      artistPushError = err.message;
+      console.error('Makeup artist owner booking notifications failed:', err.message);
     }
 
     try {
@@ -538,6 +514,13 @@ export const updateMakeupAppointment = async (req, res) => {
           appointmentId: appointment._id.toString(),
           accessToken,
         });
+        const reviewLink = buildStorefrontCustomerBookingsUrl({
+          slug: makeupArtist?.slug,
+          providerPath: 'makeup-artists',
+          providerType: 'makeup-artist',
+          appointmentId: appointment._id.toString(),
+          accessToken,
+        });
         const customer = await MakeupCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
 
         await sendCustomerAppointmentStatusNotifications({
@@ -553,6 +536,7 @@ export const updateMakeupAppointment = async (req, res) => {
           price: appointment.price || service?.price || 0,
           currency: makeupArtist?.currency || 'USD',
           manageLink,
+          reviewLink,
           pushEntries: customer?.notificationSubscriptions || [],
           pushData: {
             appointmentId: appointment._id.toString(),
@@ -605,11 +589,14 @@ export const cancelMakeupAppointment = async (req, res) => {
 
     let emailResult = null;
     let emailError = null;
+    let ownerEmailResult = null;
+    let ownerEmailError = null;
     let customerPushResult = null;
     let customerPushError = null;
 
     try {
       const makeupArtist = await MakeupArtist.findById(makeupArtistId).lean();
+      const artistUser = await User.findOne({ makeupArtistId, role: 'makeup-artist' }).select('email notificationTokens').lean();
       const customer = await MakeupCustomer.findById(appointment.customerId).select('notificationSubscriptions').lean();
       const accessToken = await ensureBookingManagementToken(appointment);
       const manageLink = buildStorefrontManageBookingUrl({
@@ -656,6 +643,26 @@ export const cancelMakeupAppointment = async (req, res) => {
       emailError = notificationResult.emailError;
       customerPushResult = notificationResult.pushResult;
       customerPushError = notificationResult.pushError;
+
+      const ownerNotification = await sendStorefrontOwnerCancellationNotification({
+        ownerUser: artistUser,
+        providerType: 'makeup-artist',
+        customerName: appointment.customerName,
+        customerEmail: appointment.customerEmail,
+        providerName: makeupArtist?.name || 'StyleVault',
+        providerLabel: 'Makeup Artist',
+        serviceName: appointment.serviceId?.name || 'Appointment',
+        appointmentDate: appointment.date,
+        appointmentTime: appointment.time,
+        location: makeupArtist?.location || 'StyleVault booking',
+        price: appointment.price || 0,
+        currency: makeupArtist?.currency || 'USD',
+        cancelledBy: 'Store owner',
+        dashboardLink: buildDashboardUrl('/makeup-artists/admin/appointments'),
+      });
+
+      ownerEmailResult = ownerNotification.emailResult;
+      ownerEmailError = ownerNotification.emailError;
     } catch (err) {
       emailError = err.message;
       customerPushError = err.message;
@@ -668,7 +675,7 @@ export const cancelMakeupAppointment = async (req, res) => {
       appointmentId: appointment._id.toString(),
     });
 
-    res.json({ appointment, emailResult, emailError, customerPushResult, customerPushError });
+    res.json({ appointment, emailResult, emailError, ownerEmailResult, ownerEmailError, customerPushResult, customerPushError });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

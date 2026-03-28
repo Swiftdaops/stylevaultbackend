@@ -9,13 +9,14 @@ import {
   resendNailConfirmationEmail,
   updateNailAppointment,
 } from '../controllers/nailAppointmentController.js';
-import { getPublicNailBooking, updatePublicNailBooking } from '../controllers/publicBookingController.js';
+import { createPublicNailReview, getPublicNailBooking, updatePublicNailBooking } from '../controllers/publicBookingController.js';
 
 const router = express.Router();
 
 router.post('/', createNailAppointment);
 router.get('/', authMiddleware, getNailAppointments);
 router.get('/public/:id', getPublicNailBooking);
+router.post('/public/:id/review', createPublicNailReview);
 router.get('/calendar', getNailCalendarAppointments);
 router.get('/availability', checkNailAvailability);
 router.patch('/public/:id', updatePublicNailBooking);
